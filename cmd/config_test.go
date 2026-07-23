@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/rdcstarr/rec-deploy/internal/config"
+	"github.com/rdcstarr/rec-deploy/internal/ui"
 )
 
 // TestTelegramPartial pins the warn condition: exactly one of the two required
@@ -92,28 +94,49 @@ func TestConfigRegistryDrivesGetSetAndCopy(t *testing.T) {
 	}
 }
 
+// discoveryCountPattern matches the shape of the deleted discoverySummary —
+// "(%d roots, %d pruned)" — so a count-based description regresses this test
+// even though its exact numbers differ from any literal value fixed below.
+var discoveryCountPattern = regexp.MustCompile(`(?i)\d+\s*roots?\b|\bpruned?\b`)
+
 // TestConfigMenuDescribesInsteadOfDumping pins that the section list says what
 // each section is for. It used to print the current values — "(chat 5775201531,
 // token ••••oJZc)" — which is noise on a screen whose whole job is to be picked
-// from, and which put a masked secret on a screen that did not need one.
+// from, and which put a masked secret on a screen that did not need one. The
+// discovery section used a different shape — "(2 roots, 2 pruned)", a count
+// rather than a literal value — so it is fixtured and checked separately from
+// the literal-value sections below.
 func TestConfigMenuDescribesInsteadOfDumping(t *testing.T) {
+	ui.SetColor(false)
+
 	saved := cfg
 	defer func() { cfg = saved }()
 	cfg = &config.Config{
 		Listen:    "0.0.0.0:9000",
 		PublicURL: "http://198.51.100.7:9000",
 		GitHub:    config.GitHubConfig{Token: "ghp_averysecrettokenvalue"},
+		Discovery: config.DiscoveryConfig{
+			Roots: []string{"/var/www", "/home/*/web/*/public_html"},
+			Prune: []string{"vendor", "node_modules"},
+		},
 		Notify: config.NotifyConfig{
 			Telegram: config.TelegramConfig{Token: "12345:secret", ChatID: "5775201531"},
 			Email:    config.EmailConfig{SMTP: "smtp.example.com:587", From: "a@example.com", To: "b@example.com"},
 		},
 	}
 
+	leaked := []string{
+		"0.0.0.0:9000", "198.51.100.7", "5775201531", "smtp.example.com", "b@example.com", "••••",
+		"/var/www", "/home/*/web/*/public_html", "vendor", "node_modules",
+	}
 	for _, option := range configMenuOptions() {
-		for _, leaked := range []string{"0.0.0.0:9000", "198.51.100.7", "5775201531", "smtp.example.com", "b@example.com", "••••"} {
-			if strings.Contains(option.Label, leaked) {
-				t.Errorf("the config menu still shows the value %q: %q", leaked, option.Label)
+		for _, leak := range leaked {
+			if strings.Contains(option.Label, leak) {
+				t.Errorf("the config menu still shows the value %q: %q", leak, option.Label)
 			}
+		}
+		if discoveryCountPattern.MatchString(option.Label) {
+			t.Errorf("the config menu still shows a discovery count instead of a description: %q", option.Label)
 		}
 	}
 
@@ -128,6 +151,36 @@ func TestEverySectionIsDescribed(t *testing.T) {
 	for _, section := range configSections {
 		if section.Description == "" {
 			t.Errorf("config section %q has no description", section.Key)
+		}
+	}
+}
+
+// TestConfigMenuOptionsCarryDescriptions pins that each section's registry
+// description actually reaches the rendered menu label, not merely that the
+// registry has one filled in. TestEverySectionIsDescribed only checks the
+// registry, and TestConfigMenuDescribesInsteadOfDumping only checks that bad
+// values are absent — dropping Description from the DescribedOption literal
+// in configMenuOptions would leave both green while silently removing every
+// description this feature exists to show. Driven off configSections so a new
+// section cannot be added without this check covering it too.
+func TestConfigMenuOptionsCarryDescriptions(t *testing.T) {
+	ui.SetColor(false)
+
+	options := configMenuOptions()
+	for _, section := range configSections {
+		var label string
+		var found bool
+		for _, option := range options {
+			if option.Value == section.Key {
+				label, found = option.Label, true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("no menu option for section %q", section.Key)
+		}
+		if !strings.Contains(label, section.Description) {
+			t.Errorf("section %q label %q does not carry its description %q", section.Key, label, section.Description)
 		}
 	}
 }
