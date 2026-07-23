@@ -185,6 +185,33 @@ func TestConfigMenuOptionsCarryDescriptions(t *testing.T) {
 	}
 }
 
+// TestNotificationSectionsOfferATest pins that notify leaves the hub with a
+// home: sending a test message belongs beside the settings it exercises, and
+// the notification sections are the only interactive way to it now.
+func TestNotificationSectionsOfferATest(t *testing.T) {
+	saved := cfg
+	defer func() { cfg = saved }()
+	cfg = &config.Config{}
+
+	for _, section := range []string{"telegram", "email"} {
+		var found bool
+		for _, option := range configSectionOptions(section) {
+			if option.Value == "test" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the %s section does not offer a test send", section)
+		}
+	}
+
+	for _, option := range configSectionOptions("server") {
+		if option.Value == "test" {
+			t.Error("the server section offers a notification test")
+		}
+	}
+}
+
 func TestValidateConfigValue(t *testing.T) {
 	tests := []struct {
 		name    string

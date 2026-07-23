@@ -32,7 +32,7 @@ func newConfigCmd() *cobra.Command {
   rec-deploy config set discovery.roots /var/www,/home/*/web/*/public_html`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if isInteractive() {
-				return configMenu(cmd.Context())
+				return configMenu(cmd)
 			}
 
 			return printConfig()
@@ -46,13 +46,13 @@ func newConfigCmd() *cobra.Command {
 
 // configMenu is the interactive section picker: it loops until the user backs
 // out, running the chosen section's form and saving what it collected.
-func configMenu(ctx context.Context) error {
+func configMenu(cmd *cobra.Command) error {
 	return (ui.Menu{
 		Title:      ui.ScreenPath("rec-deploy", "Config"),
 		Options:    configMenuOptions,
 		Help:       func() string { return menuHelp },
 		BackValues: map[string]bool{"exit": true},
-		Handle:     func(section string) error { return openConfigSection(ctx, section) },
+		Handle:     func(section string) error { return openConfigSection(cmd, section) },
 	}).Run()
 }
 
@@ -70,13 +70,21 @@ func configMenuOptions() []ui.Option {
 
 // openConfigSection opens a scoped overview before editing one setting. Secret
 // values stay masked here and can be revealed only inside their own editor.
-func openConfigSection(ctx context.Context, section string) error {
+// Telegram and email also offer "Send a test", which dispatches to the
+// top-level notify command rather than editing a field.
+func openConfigSection(cmd *cobra.Command, section string) error {
 	return (ui.Menu{
 		Title:      ui.ScreenPath("rec-deploy", "Config", configSectionTitle(section)),
 		Options:    func() []ui.Option { return configSectionOptions(section) },
 		SelectHelp: "edit setting",
 		BackValues: map[string]bool{"back": true},
-		Handle:     func(key string) error { return configureConfigField(ctx, key) },
+		Handle: func(key string) error {
+			if key == "test" {
+				return dispatch(cmd.Root(), "notify")
+			}
+
+			return configureConfigField(cmd.Context(), key)
+		},
 	}).Run()
 }
 
@@ -164,7 +172,15 @@ func configSectionOptions(section string) []ui.Option {
 		}
 		items = append(items, ui.DescribedOption{Name: field.Label, Description: field.display(cfg), Value: field.Key})
 	}
+
+	// Testing a channel belongs beside the settings it exercises, not in a
+	// top-level command whose entire content is one action.
+	if section == "telegram" || section == "email" {
+		items = append(items, ui.DescribedOption{Name: "Send a test", Description: "deliver a sample deploy summary through this channel", Value: "test"})
+	}
+
 	options := ui.DescribedOptions(items...)
+
 	return append(options, ui.Option{Label: "Back", Value: "back"})
 }
 

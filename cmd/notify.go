@@ -14,10 +14,11 @@ import (
 // channels.
 func newNotifyCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "notify",
-		Short: "Probe the configured notification channels",
-		Long:  "notify sends a probe through every notification channel and reports each outcome — the terminal, not journalctl, is where an operator learns why a channel is silent.",
-		Args:  cobra.NoArgs,
+		Use:         "notify",
+		Short:       "Probe the configured notification channels",
+		Long:        "notify sends a probe through every notification channel and reports each outcome — the terminal, not journalctl, is where an operator learns why a channel is silent.",
+		Args:        cobra.NoArgs,
+		Annotations: map[string]string{annotationInteractive: "false"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !isInteractive() {
 				return cmd.Help()

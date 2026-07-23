@@ -21,7 +21,6 @@ func TestEveryCommandIsReachable(t *testing.T) {
 	nested := map[string]string{
 		"scan":     "status",
 		"rollback": "repo",
-		"notify":   "config",
 	}
 
 	hub := make(map[string]bool)
