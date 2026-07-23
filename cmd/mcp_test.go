@@ -95,19 +95,70 @@ func TestMCPMenuOffersOnlyValidLifecycleAction(t *testing.T) {
 	}
 }
 
-func TestEnabledMCPMenuExposesConnectionWithoutTokenSubmenu(t *testing.T) {
+// TestEnabledMCPMenuCanRotateTheToken pins a reachability bug closed: with MCP
+// enabled the menu used to offer show-token, which only views — so rotation,
+// needed on exactly the servers that have a token, was unreachable from any
+// menu. The entry now opens the token menu, which both reveals and rotates.
+func TestEnabledMCPMenuCanRotateTheToken(t *testing.T) {
 	options := mcpMenuOptions(&config.Config{MCP: config.MCPConfig{Enabled: true, Listen: "127.0.0.1:8765"}})
 	seen := make(map[string]bool, len(options))
 	for _, option := range options {
 		seen[option.Value] = true
 	}
-	for _, want := range []string{"client-config", "show-token", "cloudflare", "disable"} {
+
+	for _, want := range []string{"status", "client-config", "token", "cloudflare", "disable"} {
 		if !seen[want] {
 			t.Errorf("enabled MCP menu does not include %q: %v", want, seen)
 		}
 	}
-	if seen["token"] {
-		t.Errorf("enabled MCP menu still requires the nested token menu: %v", seen)
+	if seen["show-token"] {
+		t.Errorf("enabled MCP menu still points at the view-only token command: %v", seen)
+	}
+}
+
+// TestMCPStatusRowsDropRedundantFacts pins the de-noised status: remote, mode
+// and public HTTPS were the same bit — they are set and cleared together — and
+// listen is already inside endpoint. token was always "set" when MCP is on,
+// because serve refuses to start otherwise.
+func TestMCPStatusRowsDropRedundantFacts(t *testing.T) {
+	off := mcpStatusRows(&config.Config{MCP: config.MCPConfig{Listen: "0.0.0.0:8765"}})
+	if len(off) != 1 || off[0][0] != "access" || off[0][1] != "off" {
+		t.Fatalf("a disabled endpoint needs one row, got %+v", off)
+	}
+
+	on := mcpStatusRows(&config.Config{MCP: config.MCPConfig{Enabled: true, Listen: "0.0.0.0:8765"}})
+	keys := make([]string, 0, len(on))
+	for _, row := range on {
+		keys = append(keys, row[0])
+	}
+	for _, unwanted := range []string{"remote", "mode", "listen", "token", "public HTTPS", "MCP service", "Cloudflare tunnel"} {
+		for _, key := range keys {
+			if key == unwanted {
+				t.Errorf("status still shows the redundant row %q: %v", unwanted, keys)
+			}
+		}
+	}
+	if len(on) < 3 {
+		t.Errorf("status lost a fact it is the only place to read: %v", keys)
+	}
+}
+
+// TestMCPAccessStateNamesTheTransport pins the one row that replaces three.
+func TestMCPAccessStateNamesTheTransport(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		cfg  config.MCPConfig
+		want string
+	}{
+		{name: "off", cfg: config.MCPConfig{}, want: "off"},
+		{name: "local", cfg: config.MCPConfig{Enabled: true}, want: "local HTTP"},
+		{name: "cloudflare", cfg: config.MCPConfig{Enabled: true, Mode: "cloudflare"}, want: "Cloudflare tunnel"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := mcpAccessState(&config.Config{MCP: test.cfg}); got != test.want {
+				t.Errorf("mcpAccessState = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

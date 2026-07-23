@@ -71,7 +71,7 @@ func mcpMenuOptions(cfg *config.Config) []ui.Option {
 	if cfg.MCP.Enabled {
 		items = append(items,
 			ui.DescribedOption{Name: "Client JSON", Description: "ready to copy into an MCP client", Value: "client-config"},
-			ui.DescribedOption{Name: "Bearer token", Description: "show the token used by MCP clients", Value: "show-token"},
+			ui.DescribedOption{Name: "Bearer token", Description: mcpTokenSummary(cfg.MCP.TokenHash), Value: "token"},
 			ui.DescribedOption{Name: "Cloudflare", Description: cloudflareCredentialSummary(cfg.MCP.Cloudflare), Value: "cloudflare"},
 			ui.DescribedOption{Name: "Disable", Description: "remove public remote access", Value: "disable"},
 		)
@@ -247,31 +247,161 @@ func newMCPDisableCmd() *cobra.Command {
 func newMCPStatusCmd() *cobra.Command {
 	return &cobra.Command{Use: "status", Short: "Show remote MCP configuration", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		if isInteractive() && !flagJSON {
-			return mcpStatusView()
+			return mcpStatusView(cmd)
 		}
+
 		return printMCPStatus()
 	}}
 }
 
-func mcpStatusView() error {
-	cfg := Config()
-	return (ui.Report{
-		Title: ui.ScreenPath("rec-deploy", "MCP", "Status"),
-		Rows:  mcpStatusRows(cfg),
-	}).Run()
+// mcpStatusView shows what remote MCP is doing and lets the operator act on it.
+// It was a ui.Detail, which by design has no keys at all — so the one screen
+// that knows the endpoint is unreachable could not restart the service, and the
+// token could not be reached from here either.
+func mcpStatusView(cmd *cobra.Command) error {
+	for {
+		if ui.Quitting() {
+			return ui.ErrQuit
+		}
+
+		cfg := Config()
+
+		// Two or three systemctl calls plus a five-second HTTP probe. It used to
+		// run with no spinner, which is a dead pause on exactly the servers whose
+		// endpoint is not answering.
+		var rows [][2]string
+		if err := ui.Spinner("Checking remote MCP…", func() error {
+			rows = mcpStatusRows(cfg)
+
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		items := make([]ui.DescribedOption, 0, len(rows))
+		for _, row := range rows {
+			items = append(items, ui.DescribedOption{Name: row[0], Description: row[1], Value: row[0]})
+		}
+
+		picker := ui.Picker{
+			Title:      ui.ScreenPath("rec-deploy", "MCP", "Status"),
+			Options:    ui.DescribedOptions(items...),
+			SelectHelp: "enable",
+			Help:       commandHelp(cmd),
+		}
+		if cfg.MCP.Enabled {
+			picker.SelectHelp = "no action"
+			picker.Keys = []ui.Key{
+				{Key: "t", Help: "token"},
+				{Key: "s", Help: "restart service"},
+				{Key: "r", Help: "re-check"},
+			}
+		}
+
+		res, err := picker.Run()
+		if err != nil {
+			return err
+		}
+
+		// token and enable are children of mcp, not of status — dispatch needs the
+		// parent command's own children to resolve them.
+		var actionErr error
+		switch {
+		case res.Value == "":
+			return ui.ErrBack
+		case res.Key == "t":
+			actionErr = dispatch(cmd.Parent(), "token")
+		case res.Key == "s":
+			actionErr = restartMCPService(cmd.Context(), cfg)
+		case res.Key == "r":
+			// The loop re-probes.
+		case !cfg.MCP.Enabled:
+			actionErr = dispatch(cmd.Parent(), "enable")
+		}
+
+		if ui.IsQuit(actionErr) {
+			return actionErr
+		}
+		ui.RenderError(actionErr)
+	}
 }
 
-func mcpStatusRows(cfg *config.Config) [][2]string {
-	return [][2]string{
-		{"remote", onOff(cfg.MCP.Enabled)},
-		{"mode", orDefault(cfg.MCP.Mode, "legacy-http")},
-		{"listen", cfg.MCP.Listen},
-		{"endpoint", mcpEndpoint(cfg)},
-		{"token", tokenState(cfg.MCP.TokenHash)},
-		{"MCP service", serviceState(mcpService)},
-		{"Cloudflare tunnel", serviceState(mcpTunnelService)},
-		{"public HTTPS", mcpPublicState(cfg)},
+// restartMCPService restarts the units that serve remote MCP. A restart drops
+// whatever a client is doing, so it confirms — this screen is only reached from
+// a terminal.
+func restartMCPService(ctx context.Context, cfg *config.Config) error {
+	ok, err := ui.Confirm("Restart the remote MCP service?", "Clients reconnect. The bearer token does not change.")
+	if err != nil || !ok {
+		return err
 	}
+
+	restarted := []string{mcpService}
+	if cfg.MCP.Mode == "cloudflare" {
+		restarted = append(restarted, mcpTunnelService)
+	}
+	for _, unit := range restarted {
+		if err := systemd.Restart(ctx, unit); err != nil {
+			return err
+		}
+	}
+
+	ui.Success("restarted " + strings.Join(restarted, " and "))
+
+	return nil
+}
+
+// mcpStatusRows are the facts about remote MCP worth a row. remote, mode and
+// public HTTPS used to be three renderings of one bit — they are set and
+// cleared together — listen is already inside endpoint, and token was always
+// "set" whenever MCP was on, because serve refuses to start without one.
+func mcpStatusRows(cfg *config.Config) [][2]string {
+	if !cfg.MCP.Enabled {
+		return [][2]string{{"access", "off"}}
+	}
+
+	rows := [][2]string{
+		{"access", mcpAccessState(cfg)},
+		{"endpoint", mcpEndpoint(cfg)},
+		{"service", mcpServiceState(cfg)},
+	}
+
+	// Only a Cloudflare endpoint has a public URL to probe; there is nothing to
+	// report for a listener reachable only from this network.
+	if cfg.MCP.Mode == "cloudflare" && cfg.MCP.PublicURL != "" {
+		rows = append(rows, [2]string{"reachable", mcpPublicState(cfg)})
+	}
+
+	return rows
+}
+
+// mcpAccessState names how clients reach this server, replacing the three rows
+// that each rendered the same bit.
+func mcpAccessState(cfg *config.Config) string {
+	if !cfg.MCP.Enabled {
+		return "off"
+	}
+	if cfg.MCP.Mode == "cloudflare" {
+		return "Cloudflare tunnel"
+	}
+
+	return "local HTTP"
+}
+
+// mcpServiceState folds the MCP unit and its Cloudflare tunnel into one row,
+// splitting them only when they disagree: a healthy server should not spend two
+// rows saying so.
+func mcpServiceState(cfg *config.Config) string {
+	mcp := serviceState(mcpService)
+	if cfg.MCP.Mode != "cloudflare" {
+		return mcp
+	}
+
+	tunnel := serviceState(mcpTunnelService)
+	if mcp == tunnel {
+		return mcp
+	}
+
+	return mcp + " · tunnel " + tunnel
 }
 
 func newMCPTokenCmd() *cobra.Command {
