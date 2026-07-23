@@ -43,6 +43,24 @@ func TestDocumentScrolls(t *testing.T) {
 	}
 }
 
+// TestDocumentUnsizedBodyKeepsTrailingNewline pins that an unsized document
+// renders its title block followed by exactly Body + "\n" — lines() trims the
+// body's trailing newline for windowing math, and that trim must not leak into
+// what gets printed when no window applies (regression: a body ending in "\n"
+// used to render one line short).
+func TestDocumentUnsizedBodyKeepsTrailingNewline(t *testing.T) {
+	SetColor(false)
+
+	body := "one\ntwo\n"
+	m := documentModel{Document: Document{Title: "output", Body: body}}
+
+	want := render(StyleTitle, "output") + "\n\n" + body + "\n\n" +
+		render(StyleSubtle, "enter/"+navigationFooter(navigationDetail)) + "\n"
+	if got := m.View(); got != want {
+		t.Errorf("unsized document with trailing newline rendered wrong:\ngot:  %q\nwant: %q", got, want)
+	}
+}
+
 // TestDocumentShowsEverythingWhenItFits pins that a body shorter than the
 // terminal, and a model that has never received a size, render unchanged.
 func TestDocumentShowsEverythingWhenItFits(t *testing.T) {

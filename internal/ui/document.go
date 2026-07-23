@@ -91,14 +91,19 @@ func (m documentModel) View() string {
 	var b strings.Builder
 	b.WriteString(render(StyleTitle, m.Title) + "\n\n")
 
+	// body defaults to the untouched Body so a document that fits, or one that
+	// has never received a WindowSizeMsg, renders byte-identically to a plain
+	// "m.Body + \"\\n\"" — lines() trims the trailing newline for windowing math
+	// and must not leak that trim into what gets printed when no window applies.
 	lines := m.lines()
 	footer := "enter/" + navigationFooter(navigationDetail)
+	body := m.Body + "\n"
 	if rows := m.bodyRows(); rows > 0 && rows < len(lines) {
 		footer = "↑/↓ scroll • " + footer + fmt.Sprintf(" • %d-%d/%d", m.top+1, m.top+rows, len(lines))
-		lines = lines[m.top : m.top+rows]
+		body = strings.Join(lines[m.top:m.top+rows], "\n") + "\n"
 	}
 
-	b.WriteString(strings.Join(lines, "\n") + "\n")
+	b.WriteString(body)
 	b.WriteString("\n" + render(StyleSubtle, footer) + "\n")
 
 	return b.String()
