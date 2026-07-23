@@ -52,6 +52,52 @@ func TestSelfUpdateHasNoSubMenu(t *testing.T) {
 	}
 }
 
+// TestRunUpdatePathConfirmedRestartNeverInstalls pins the CRITICAL fix: a
+// confirmed restart must run only the restart path, never the plain install
+// first. The old interactive flow ran selfUpdateInstall unconditionally and
+// then, on a confirmed restart, ApplyAndRestart a second time — which backed
+// up the binary the first install had already replaced, so a rollback
+// restored a copy of the new, possibly broken, release rather than the
+// genuine outgoing one. This test fails if that install-then-restart
+// sequence is reintroduced, because it would observe install having run.
+func TestRunUpdatePathConfirmedRestartNeverInstalls(t *testing.T) {
+	var installed, restarted bool
+
+	err := runUpdatePath(true,
+		func() error { installed = true; return nil },
+		func() error { restarted = true; return nil },
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if installed {
+		t.Error("a confirmed restart must not also run the plain install path")
+	}
+	if !restarted {
+		t.Error("a confirmed restart must run the restart path")
+	}
+}
+
+// TestRunUpdatePathDeclinedRestartOnlyInstalls is the complementary case:
+// without a confirmed restart, exactly the plain install runs.
+func TestRunUpdatePathDeclinedRestartOnlyInstalls(t *testing.T) {
+	var installed, restarted bool
+
+	err := runUpdatePath(false,
+		func() error { installed = true; return nil },
+		func() error { restarted = true; return nil },
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !installed {
+		t.Error("a declined restart must run the plain install path")
+	}
+	if restarted {
+		t.Error("a declined restart must not run the restart path")
+	}
+}
+
 // TestSkipsKnownBadRelease: the updater skips only when the newest release is
 // exactly the tag already recorded as bad. An empty memory never skips; a bad
 // tag that is not the newest release (a good one has since superseded it) does

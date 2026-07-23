@@ -90,47 +90,74 @@ func selfUpdateInteractive(ctx context.Context, current string) error {
 		return ui.ErrBack
 	}
 
-	if err := selfUpdateInstall(ctx, current); err != nil {
+	wantRestart, err := confirmRestart(ctx, current, res.Latest)
+	if err != nil {
 		return err
 	}
 
-	return offerRestart(ctx, current, res.Latest)
+	return runUpdatePath(wantRestart,
+		func() error { return selfUpdateInstall(ctx, current) },
+		func() error {
+			return ui.Spinner("Updating rec-deploy and restarting "+daemonUnit+"…", func() error {
+				return selfUpdateRestart(ctx, current)
+			})
+		},
+	)
 }
 
-// offerRestart brings the daemon onto the binary that was just installed. It
-// runs the same supervised path the update timer uses — backup, restart, three
-// consecutive health samples, automatic rollback — rather than a bare restart,
-// because an operator restarting by hand deserves the same net as one who never
-// watches it happen.
+// runUpdatePath performs exactly one of install or restart, never both. It
+// exists so the routing decision itself is a single, unit-testable function:
+// selfUpdateInteractive used to call selfUpdateInstall unconditionally and
+// then, on a confirmed restart, ApplyAndRestart a second time — which backed
+// up the binary the first install had already replaced, so a rollback
+// restored a copy of the new, possibly broken, release instead of the
+// genuine outgoing one. Keeping the two paths mutually exclusive here is
+// what makes that bug impossible to reintroduce silently.
+func runUpdatePath(wantRestart bool, install, restart func() error) error {
+	if wantRestart {
+		return restart()
+	}
+
+	return install()
+}
+
+// confirmRestart asks whether to bring the daemon onto the release that is
+// about to be installed, using the supervised restart path (backup, restart,
+// three consecutive health samples, automatic rollback) rather than a bare
+// restart — an operator restarting by hand deserves the same net as one who
+// never watches it happen.
 //
-// It asks rather than doing it: a restart cuts short whatever the daemon is
-// running, and a spent delivery is not redelivered.
-func offerRestart(ctx context.Context, current, latest string) error {
+// It only decides; it does not install or restart anything itself. Asking
+// before anything is written is what lets the caller take exactly one path
+// afterward instead of installing and then, separately, restarting.
+func confirmRestart(ctx context.Context, current, latest string) (bool, error) {
 	if !systemd.Available() {
 		ui.Info("restart the daemon to run the new version")
 
-		return nil
+		return false, nil
 	}
 	if !systemd.IsActive(ctx, daemonUnit) {
-		return nil
+		ui.Info(daemonUnit + " is not running and was left stopped — start it to run the new version")
+
+		return false, nil
 	}
 
 	detail := "The daemon is still running " + current + ". It is stopped and started on " + latest + ", and rolled back automatically if it does not stay up."
-	if running, err := runningDeployCount(ctx); err == nil && running > 0 {
+	if running, err := runningDeployCount(ctx); err != nil {
+		slog.Warn("cannot count running deploys for the restart prompt", "error", err)
+	} else if running > 0 {
 		detail = plural(running, "deploy") + " running right now would be cut short. " + detail
 	}
 
 	ok, err := ui.Confirm("Restart "+daemonUnit+" now?", detail)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !ok {
 		ui.Info("restart it when convenient:  systemctl restart " + daemonUnit)
-
-		return nil
 	}
 
-	return selfUpdateRestart(ctx, current)
+	return ok, nil
 }
 
 // runningDeployCount is how many deploys are in flight, so the restart prompt
