@@ -23,9 +23,17 @@ TimeoutStopSec=960
 
 # /var/lib/rec-deploy — state.db, the ed25519 deploy keys, the flock files.
 # /etc/rec-deploy   — config.yaml, which holds the GitHub token.
-# Both root-only: they contain every secret this binary owns.
+#
+# The state directory is 0711, not 0700: a deploy drops into the site user and
+# its git has to read known_hosts (0644) inside it, so that user needs to
+# traverse the directory. 0711 grants exactly that lookup and no listing, and
+# every secret in there is unreadable in its own right — keys/ is 0700, state.db
+# and the config are 0600. 0700 here silently breaks every deploy with "No
+# ED25519 host key is known for github.com", because systemd re-applies this
+# mode on every start and takes the directory back from under the running
+# daemon.
 StateDirectory=rec-deploy
-StateDirectoryMode=0700
+StateDirectoryMode=0711
 ConfigurationDirectory=rec-deploy
 ConfigurationDirectoryMode=0700
 

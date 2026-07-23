@@ -167,3 +167,57 @@ func TestServeIsNotAHubEntry(t *testing.T) {
 		t.Error("serve must stay in --help and in shell completion")
 	}
 }
+
+// TestServeGuardDoesNotShootTheServiceItProtects is the regression test for a
+// daemon that could never run. Type=simple marks a unit active the moment
+// ExecStart forks, so the guard asked "is rec-deploy.service active?", answered
+// yes about itself and exited 1 — into Restart=on-failure and a five-second
+// crash loop. The server looked installed and every webhook silently deployed
+// nothing.
+func TestServeGuardDoesNotShootTheServiceItProtects(t *testing.T) {
+	t.Setenv("INVOCATION_ID", "5b1e9a0c8f7d4e2a")
+	if !underSystemd() {
+		t.Fatal("a process systemd spawned did not recognise itself as one")
+	}
+
+	// The unit check must be skipped entirely under systemd, whatever the unit's
+	// state — that state includes this very process.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	free := ln.Addr().String()
+	_ = ln.Close()
+
+	if err := serveGuard(context.Background(), free); err != nil {
+		t.Errorf("the daemon refused to start as its own systemd unit: %v", err)
+	}
+}
+
+// TestServeGuardStillRefusesABareSecondDaemon keeps the guard's real job intact:
+// a hand-started `rec-deploy serve` beside the systemd one would reconcile the
+// live daemon's in-flight deploys to `interrupted`, and their deliveries are
+// already recorded, so nothing would ever deploy them again.
+func TestServeGuardStillRefusesABareSecondDaemon(t *testing.T) {
+	// Setenv registers the restore; Unsetenv is what actually makes the lookup
+	// miss, which is the state a hand-started daemon is in.
+	t.Setenv("INVOCATION_ID", "")
+	if err := os.Unsetenv("INVOCATION_ID"); err != nil {
+		t.Fatalf("unset INVOCATION_ID: %v", err)
+	}
+	if underSystemd() {
+		t.Fatal("a process started by hand claimed to be a systemd service")
+	}
+
+	// A bound port stands in for the busy resource, so the refusal is exercised
+	// without needing a live unit on the test machine.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	if err := serveGuard(context.Background(), ln.Addr().String()); err == nil {
+		t.Error("serve started on a port that was already bound")
+	}
+}

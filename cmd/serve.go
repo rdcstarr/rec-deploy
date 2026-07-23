@@ -171,6 +171,21 @@ func newServeCmd() *cobra.Command {
 	return cmd
 }
 
+// underSystemd reports whether this process IS a systemd service rather than
+// something started beside one. systemd sets INVOCATION_ID for every process it
+// spawns for a unit, and for nothing else.
+//
+// Without this check the guard below shot the daemon it was meant to protect:
+// Type=simple marks a unit active the moment ExecStart forks, so the daemon
+// asked "is rec-deploy.service active?", answered yes about itself, and exited 1
+// — into Restart=on-failure, a five-second loop, and a server whose webhooks
+// silently never deployed anything.
+func underSystemd() bool {
+	_, ok := os.LookupEnv("INVOCATION_ID")
+
+	return ok
+}
+
 // serveGuard refuses to start a second daemon beside the one systemd is already
 // running. It has to run before anything else in serve: ReconcileInterrupted
 // settles deploys that a killed process left `running`, and against a live
@@ -182,7 +197,7 @@ func newServeCmd() *cobra.Command {
 // listen; that is fine. Its job is to fail before the state is touched, not to
 // be the only thing that reports a busy port.
 func serveGuard(ctx context.Context, listen string) error {
-	if systemd.Available() && systemd.IsActive(ctx, daemonUnit) {
+	if !underSystemd() && systemd.Available() && systemd.IsActive(ctx, daemonUnit) {
 		return fmt.Errorf("%s is already running this daemon — follow it with `journalctl -u %s -f`, or stop it first with `systemctl stop %s`", daemonUnit, daemonUnit, daemonUnit)
 	}
 

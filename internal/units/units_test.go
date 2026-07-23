@@ -111,3 +111,25 @@ func TestMCPServiceAllowsSQLiteCoordinationFiles(t *testing.T) {
 		t.Error("MCP unit cannot create SQLite WAL/SHM coordination files")
 	}
 }
+
+// TestStateDirectoryIsTraversableByDeployUsers pins the mode a deploy depends
+// on. systemd re-applies StateDirectoryMode on every start, so 0700 here does
+// not merely fail once — it takes /var/lib/rec-deploy back from under a running
+// daemon, and every deploy that drops into a site user then dies with "No
+// ED25519 host key is known for github.com" because that user cannot traverse
+// the directory holding known_hosts. The secrets inside stay protected on their
+// own: keys/ is 0700, the database and the config are 0600.
+func TestStateDirectoryIsTraversableByDeployUsers(t *testing.T) {
+	unit, err := files.ReadFile("files/rec-deploy.service")
+	if err != nil {
+		t.Fatalf("read unit: %v", err)
+	}
+	body := string(unit)
+
+	if !strings.Contains(body, "StateDirectoryMode=0711") {
+		t.Error("the state directory is not traversable by deploy users; every deploy will fail host key verification")
+	}
+	if strings.Contains(body, "StateDirectoryMode=0700") {
+		t.Error("StateDirectoryMode=0700 is back — it locks the site user out of known_hosts on every service start")
+	}
+}
