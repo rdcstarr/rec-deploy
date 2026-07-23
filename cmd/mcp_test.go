@@ -143,6 +143,30 @@ func TestMCPStatusRowsDropRedundantFacts(t *testing.T) {
 	}
 }
 
+// TestMCPFoldServiceStatesSplitsOnlyOnDisagreement pins the fold/split
+// decision mcpServiceState delegates to, independent of systemd: a healthy
+// server spends one row saying so, and a disagreement is spelled out rather
+// than hidden behind whichever state happened to be read first.
+func TestMCPFoldServiceStatesSplitsOnlyOnDisagreement(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		mcp, tunnel string
+		want        string
+	}{
+		{name: "both active", mcp: "active", tunnel: "active", want: "active"},
+		{name: "both inactive", mcp: "inactive", tunnel: "inactive", want: "inactive"},
+		{name: "mcp active tunnel inactive", mcp: "active", tunnel: "inactive", want: "active · tunnel inactive"},
+		{name: "mcp inactive tunnel active", mcp: "inactive", tunnel: "active", want: "inactive · tunnel active"},
+		{name: "systemd unavailable on both", mcp: "unavailable", tunnel: "unavailable", want: "unavailable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := foldServiceStates(test.mcp, test.tunnel); got != test.want {
+				t.Errorf("foldServiceStates(%q, %q) = %q, want %q", test.mcp, test.tunnel, got, test.want)
+			}
+		})
+	}
+}
+
 // TestMCPAccessStateNamesTheTransport pins the one row that replaces three.
 func TestMCPAccessStateNamesTheTransport(t *testing.T) {
 	for _, test := range []struct {

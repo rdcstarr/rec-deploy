@@ -339,10 +339,19 @@ func restartMCPService(ctx context.Context, cfg *config.Config) error {
 	if cfg.MCP.Mode == "cloudflare" {
 		restarted = append(restarted, mcpTunnelService)
 	}
-	for _, unit := range restarted {
-		if err := systemd.Restart(ctx, unit); err != nil {
-			return err
+
+	// Restarting the Cloudflare tunnel re-establishes cloudflared and is
+	// plausibly multi-second; two units restarted sequentially is a dead
+	// pause between "Yes" and the result without this.
+	if err := ui.Spinner("Restarting remote MCP…", func() error {
+		for _, unit := range restarted {
+			if err := systemd.Restart(ctx, unit); err != nil {
+				return err
+			}
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	ui.Success("restarted " + strings.Join(restarted, " and "))
@@ -396,7 +405,13 @@ func mcpServiceState(cfg *config.Config) string {
 		return mcp
 	}
 
-	tunnel := serviceState(mcpTunnelService)
+	return foldServiceStates(mcp, serviceState(mcpTunnelService))
+}
+
+// foldServiceStates renders the MCP unit and tunnel states as one value when
+// they agree, splitting them only when they disagree — pulled out of
+// mcpServiceState so the fold/split decision is testable without systemd.
+func foldServiceStates(mcp, tunnel string) string {
 	if mcp == tunnel {
 		return mcp
 	}
