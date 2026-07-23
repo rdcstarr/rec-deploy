@@ -84,18 +84,52 @@ func TestCloneDestinationEntriesIncludesHiddenDirectories(t *testing.T) {
 	}
 }
 
-// TestRepoMenuOffersRollback pins that rollback is reachable from the
-// repository menu: it is not a hub entry, and a menu is the only interactive
-// way to it.
+// TestRepoMenuOffersRollback pins that the repo menu offers rollback and that
+// choosing it resolves against the right command: rollback is a root-level
+// command, not a child of repo, and repo's Handle has to dispatch it from
+// cmd.Root() or the choice fails to resolve. The table also pins every other
+// entry to repo itself, so a routing regression on any of them fails here too,
+// and its length is checked against repoMenuOptions() so the two cannot drift
+// apart — an entry added to one without the other is a test failure, not a
+// silent gap in coverage.
 func TestRepoMenuOffersRollback(t *testing.T) {
-	seen := make(map[string]bool)
-	for _, option := range repoMenuOptions() {
-		seen[option.Value] = true
+	root := newRootCmd()
+	repo, _, err := root.Find([]string{"repo"})
+	if err != nil {
+		t.Fatalf("find the repo command: %v", err)
 	}
 
-	for _, want := range []string{"add", "list", "show", "install", "rotate", "remove", "rollback"} {
-		if !seen[want] {
-			t.Errorf("repo menu does not offer %q: %v", want, seen)
+	// value -> dispatches from root (true) or from repo itself (false).
+	routing := map[string]bool{
+		"add":      false,
+		"list":     false,
+		"show":     false,
+		"install":  false,
+		"rotate":   false,
+		"rollback": true,
+		"remove":   false,
+	}
+
+	options := repoMenuOptions()
+	if len(options) != len(routing) {
+		t.Fatalf("repoMenuOptions returned %d entries, routing table covers %d — keep them in step:\n%v", len(options), len(routing), options)
+	}
+
+	for _, option := range options {
+		fromRoot, known := routing[option.Value]
+		if !known {
+			t.Errorf("repoMenuOptions offers %q, which the routing table does not cover", option.Value)
+
+			continue
+		}
+
+		want := repo
+		if fromRoot {
+			want = root
+		}
+
+		if got := repoDispatchFrom(repo, option.Value); got != want {
+			t.Errorf("repoDispatchFrom(repo, %q) did not dispatch from the expected command", option.Value)
 		}
 	}
 }

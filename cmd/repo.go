@@ -55,15 +55,23 @@ func repoMenu(cmd *cobra.Command) error {
 		Title:   ui.ScreenPath("rec-deploy", "Repositories"),
 		Options: repoMenuOptions,
 		Help:    func() string { return commandHelp(cmd) },
-		Handle: func(choice string) error {
-			// rollback is a top-level command, so it dispatches from the root.
-			if choice == "rollback" {
-				return dispatch(cmd.Root(), choice)
-			}
-
-			return dispatch(cmd, choice)
-		},
+		Handle:  func(choice string) error { return dispatch(repoDispatchFrom(cmd, choice), choice) },
 	}).Run()
+}
+
+// repoDispatchFrom resolves which command dispatch should walk from for one
+// repo-menu choice: rollback is registered on the root, not as a child of
+// repo, so dispatch has to start from cmd.Root() or it builds an argument
+// list — "repo rollback" — that cobra cannot find. Every other choice is a
+// genuine child of repo. Pulling this out of Handle as its own function is
+// what lets a test drive the decision directly, the same way inspect.go's
+// lifecycleOptions does for the status menu.
+func repoDispatchFrom(cmd *cobra.Command, choice string) *cobra.Command {
+	if choice == "rollback" {
+		return cmd.Root()
+	}
+
+	return cmd
 }
 
 // repoMenuOptions lists what an operator does to a repository, ending with the
