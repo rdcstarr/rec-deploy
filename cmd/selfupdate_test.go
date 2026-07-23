@@ -37,15 +37,17 @@ func TestSelfUpdateHasARestartFlag(t *testing.T) {
 	}
 }
 
-func TestSelfUpdateInteractiveOptions(t *testing.T) {
-	options := selfUpdateMenuOptions()
-	if len(options) != 3 {
-		t.Fatalf("self-update menu has %d options, want 3", len(options))
+// TestSelfUpdateHasNoSubMenu pins that self-update is one action. It used to
+// open a three-entry menu whose second step was unconditional: check, then
+// install, then back.
+func TestSelfUpdateHasNoSubMenu(t *testing.T) {
+	cmd := newSelfUpdateCmd()
+	if len(cmd.Commands()) != 0 {
+		t.Errorf("self-update grew subcommands: %v", cmd.Commands())
 	}
-	want := []string{"check", "install", "back"}
-	for i, value := range want {
-		if options[i].Value != value {
-			t.Errorf("option %d = %q, want %q", i, options[i].Value, value)
+	for _, flag := range []string{"check", "restart"} {
+		if cmd.Flags().Lookup(flag) == nil {
+			t.Errorf("self-update lost its --%s flag", flag)
 		}
 	}
 }

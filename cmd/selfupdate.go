@@ -48,7 +48,7 @@ func newSelfUpdateCmd() *cobra.Command {
 			}
 
 			if isInteractive() && !flagJSON {
-				return selfUpdateMenu(cmd.Context(), current)
+				return selfUpdateInteractive(cmd.Context(), current)
 			}
 
 			return selfUpdateInstall(cmd.Context(), current)
@@ -62,35 +62,99 @@ func newSelfUpdateCmd() *cobra.Command {
 	return cmd
 }
 
-func selfUpdateMenu(ctx context.Context, current string) error {
-	for {
-		res, err := ui.Picker{
-			Title:   ui.ScreenPath("rec-deploy", "Self-update"),
-			Options: selfUpdateMenuOptions(),
-		}.Run()
-		if err != nil {
-			return err
-		}
-		switch res.Value {
-		case "", "back":
-			return ui.ErrBack
-		case "check":
-			if err := selfUpdateCheck(ctx, current); err != nil {
-				ui.RenderError(err)
-			}
-			ui.Out("")
-		case "install":
-			return selfUpdateInstall(ctx, current)
-		}
+// selfUpdateInteractive is the whole interactive update: check, and if there is
+// something to install, say what and ask. It replaces a menu whose second entry
+// was the only thing the first entry could lead to.
+func selfUpdateInteractive(ctx context.Context, current string) error {
+	var res selfupdate.Result
+	if err := ui.Spinner("Checking for updates…", func() error {
+		var err error
+		res, err = selfupdate.Check(ctx, current)
+
+		return err
+	}); err != nil {
+		return err
 	}
+
+	if !res.Newer {
+		ui.Success("rec-deploy is up to date (" + res.Current + ")")
+
+		return ui.ErrBack
+	}
+
+	ok, err := ui.Confirm("Install "+res.Latest+"?", "rec-deploy "+res.Current+" → "+res.Latest+". The download is verified against the release checksums; a mismatch aborts the update.")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ui.ErrBack
+	}
+
+	if err := selfUpdateInstall(ctx, current); err != nil {
+		return err
+	}
+
+	return offerRestart(ctx, current, res.Latest)
 }
 
-func selfUpdateMenuOptions() []ui.Option {
-	return []ui.Option{
-		{Label: "Check for updates " + ui.Dim("compare this binary with the latest release"), Value: "check"},
-		{Label: "Install update    " + ui.Dim("download, verify and replace this binary"), Value: "install"},
-		{Label: "Back", Value: "back"},
+// offerRestart brings the daemon onto the binary that was just installed. It
+// runs the same supervised path the update timer uses — backup, restart, three
+// consecutive health samples, automatic rollback — rather than a bare restart,
+// because an operator restarting by hand deserves the same net as one who never
+// watches it happen.
+//
+// It asks rather than doing it: a restart cuts short whatever the daemon is
+// running, and a spent delivery is not redelivered.
+func offerRestart(ctx context.Context, current, latest string) error {
+	if !systemd.Available() {
+		ui.Info("restart the daemon to run the new version")
+
+		return nil
 	}
+	if !systemd.IsActive(ctx, daemonUnit) {
+		return nil
+	}
+
+	detail := "The daemon is still running " + current + ". It is stopped and started on " + latest + ", and rolled back automatically if it does not stay up."
+	if running, err := runningDeployCount(ctx); err == nil && running > 0 {
+		detail = plural(running, "deploy") + " running right now would be cut short. " + detail
+	}
+
+	ok, err := ui.Confirm("Restart "+daemonUnit+" now?", detail)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		ui.Info("restart it when convenient:  systemctl restart " + daemonUnit)
+
+		return nil
+	}
+
+	return selfUpdateRestart(ctx, current)
+}
+
+// runningDeployCount is how many deploys are in flight, so the restart prompt
+// can say what it would interrupt.
+func runningDeployCount(ctx context.Context) (int, error) {
+	st, err := openStore(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = st.Close() }()
+
+	deploys, err := st.Deploys(ctx, "", 50)
+	if err != nil {
+		return 0, err
+	}
+
+	running := 0
+	for _, d := range deploys {
+		if d.Status == store.StatusRunning {
+			running++
+		}
+	}
+
+	return running, nil
 }
 
 func selfUpdateCheck(ctx context.Context, current string) error {
