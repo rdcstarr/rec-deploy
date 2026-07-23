@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rdcstarr/rec-deploy/internal/config"
 	"github.com/rdcstarr/rec-deploy/internal/systemd"
 )
 
@@ -94,5 +95,37 @@ func TestInitAutoUpdateIsSkippedWithoutSystemd(t *testing.T) {
 	// terminal that is not there.
 	if err := initAutoUpdate(context.Background()); err != nil {
 		t.Fatalf("initAutoUpdate: %v", err)
+	}
+}
+
+// TestInitializedIsNilSafe pins that the hub can ask whether this server is set
+// up before any command has loaded a config — cmd.cfg is nil until
+// PersistentPreRunE runs.
+func TestInitializedIsNilSafe(t *testing.T) {
+	saved := cfg
+	defer func() { cfg = saved }()
+
+	cfg = nil
+	if initialized() {
+		t.Error("a server with no loaded config must not read as initialized")
+	}
+
+	cfg = &config.Config{Initialized: true}
+	if !initialized() {
+		t.Error("a config with the flag set must read as initialized")
+	}
+}
+
+// TestInitMCPSkipsAnEnabledEndpoint pins the re-run repair: install.sh runs init
+// on upgrades too, and enableCloudflareMCP errors on an endpoint that already
+// exists. A step error abandons every step after it, which used to take
+// notifications, auto-update and the summary with it.
+func TestInitMCPSkipsAnEnabledEndpoint(t *testing.T) {
+	saved := cfg
+	defer func() { cfg = saved }()
+
+	cfg = &config.Config{MCP: config.MCPConfig{Enabled: true, Mode: "cloudflare", PublicURL: "https://mcp.example.com/mcp"}}
+	if err := initMCP(context.Background(), cfg); err != nil {
+		t.Fatalf("initMCP must not fail on an already-enabled endpoint: %v", err)
 	}
 }

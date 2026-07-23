@@ -111,6 +111,36 @@ func TestSavePreservesUnmanagedKeys(t *testing.T) {
 	}
 }
 
+// TestInitializedRoundTrips pins the flag the interactive hub reads to decide
+// whether to offer init: a file written with it set loads with it set, and a
+// file that predates the key loads as not initialized.
+func TestInitializedRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+
+	if err := Save(path, &Config{Listen: "0.0.0.0:9000", Initialized: true}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Initialized {
+		t.Error("initialized did not survive a save/load round trip")
+	}
+
+	old := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(old, []byte("listen: 0.0.0.0:9000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = Load(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Initialized {
+		t.Error("a config file without the key must load as not initialized")
+	}
+}
+
 func TestConfiguredPredicates(t *testing.T) {
 	if (TelegramConfig{Token: "t"}).Configured() {
 		t.Error("telegram with no chat ID must not be Configured")

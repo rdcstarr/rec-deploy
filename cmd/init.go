@@ -40,6 +40,13 @@ func newInitCmd() *cobra.Command {
 	}
 }
 
+// initialized reports whether the setup wizard has completed on this server. It
+// tolerates a nil config so the hub can call it before any command has loaded
+// one.
+func initialized() bool {
+	return cfg != nil && cfg.Initialized
+}
+
 // initWizard collects every setting in order, saving as it goes, and finishes by
 // creating the state the daemon and `repo add` expect to already exist.
 func initWizard(ctx context.Context) error {
@@ -66,21 +73,36 @@ func initWizard(ctx context.Context) error {
 		return err
 	}
 
+	// Every step ran without an error, which is the whole meaning of the flag: a
+	// wizard abandoned with Esc or stopped by a failing step leaves it false, and
+	// the hub keeps offering setup.
+	cfg.Initialized = true
+	if err := save(); err != nil {
+		return err
+	}
+
 	return initSummary(login)
 }
 
-// initMCP optionally enables the daemon's authenticated remote MCP listener.
+// initMCP optionally enables the daemon's authenticated remote MCP listener. It
+// is a no-op on a server that already has one: install.sh runs init on upgrades
+// too, and enableCloudflareMCP refuses to provision a replacement — an error
+// there would abandon notifications, auto-update and the summary with it.
+// Changing an existing endpoint is what `rec-deploy mcp` is for.
 func initMCP(ctx context.Context, cfg *config.Config) error {
+	if cfg.MCP.Enabled {
+		ui.Info("remote MCP is already enabled at " + mcpEndpoint(cfg) + " — change it with `rec-deploy mcp`")
+
+		return nil
+	}
+
 	on, err := ui.Confirm("Enable remote read-only MCP access?", "Creates an isolated Cloudflare Tunnel with public HTTPS. Hestia, Nginx, Apache and the firewall are not modified.")
 	if err != nil {
 		return err
 	}
 	if !on {
-		if cfg.MCP.Enabled {
-			ui.Info("remote MCP remains enabled — disable it explicitly with `rec-deploy mcp disable`")
-		} else {
-			ui.Info("remote MCP is off — enable it later with `rec-deploy mcp enable`")
-		}
+		ui.Info("remote MCP is off — enable it later with `rec-deploy mcp enable`")
+
 		return nil
 	}
 
@@ -318,6 +340,14 @@ func initAutoUpdate(ctx context.Context) error {
 		return err
 	}
 	if !on {
+		// Declining does not turn an existing timer off, so saying "auto-update is
+		// off" on a re-run would contradict the summary two screens later.
+		if systemd.IsEnabled(ctx, updateTimer) {
+			ui.Info("auto-update stays on — turn it off with `systemctl disable --now " + updateTimer + "`")
+
+			return nil
+		}
+
 		ui.Info("auto-update is off — enable it later with `systemctl enable --now " + updateTimer + "`")
 
 		return nil

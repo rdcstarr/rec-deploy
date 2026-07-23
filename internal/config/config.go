@@ -25,6 +25,10 @@ type Config struct {
 	Notify NotifyConfig `mapstructure:"notify"`
 	// MCP configures the optional remote read-only MCP endpoint.
 	MCP MCPConfig `mapstructure:"mcp"`
+	// Initialized records that the init wizard ran every step without error. It
+	// is what tells the interactive hub to stop offering setup on a server that
+	// has already been set up.
+	Initialized bool `mapstructure:"initialized"`
 }
 
 // MCPConfig configures the remote read-only MCP endpoint.
@@ -202,6 +206,7 @@ func Save(path string, cfg *Config) error {
 	v.Set("mcp.cloudflare.tunnel_id", cfg.MCP.Cloudflare.TunnelID)
 	v.Set("mcp.cloudflare.tunnel_name", cfg.MCP.Cloudflare.TunnelName)
 	v.Set("mcp.cloudflare.dns_record_id", cfg.MCP.Cloudflare.DNSRecordID)
+	v.Set("initialized", cfg.Initialized)
 
 	if err := v.WriteConfigAs(path); err != nil {
 		return err
