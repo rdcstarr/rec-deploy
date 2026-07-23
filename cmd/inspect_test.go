@@ -270,6 +270,46 @@ func TestStatusMenuOffersScanAndOneLifecycleAction(t *testing.T) {
 	}
 }
 
+// TestLifecycleOptionsOffersExactlyTheApplicableTransition pins the invariant
+// TestStatusMenuOffersScanAndOneLifecycleAction cannot: driven off the real
+// systemd.Available(), that test skips the whole branch on any host without
+// systemd — including the box this was written on — so start and stop are
+// both simply absent, which passes vacuously even if the underlying condition
+// were reversed. Testing lifecycleOptions directly, against an explicit
+// daemonLifecycle, exercises all three states regardless of the host.
+func TestLifecycleOptionsOffersExactlyTheApplicableTransition(t *testing.T) {
+	tests := []struct {
+		name  string
+		state daemonLifecycle
+		want  []string
+	}{
+		{"no systemd offers no lifecycle action", daemonUnmanaged, nil},
+		{"active offers restart and stop, never start", daemonActive, []string{"restart", "stop"}},
+		{"inactive offers start, never stop or restart", daemonInactive, []string{"start"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			seen := make(map[string]bool)
+			for _, option := range lifecycleOptions(tt.state) {
+				seen[option.Value] = true
+			}
+
+			if seen["start"] && seen["stop"] {
+				t.Fatalf("lifecycleOptions(%v) offers both start and stop: %v", tt.state, seen)
+			}
+			for _, want := range tt.want {
+				if !seen[want] {
+					t.Errorf("lifecycleOptions(%v) missing %q: %v", tt.state, want, seen)
+				}
+			}
+			if len(seen) != len(tt.want) {
+				t.Errorf("lifecycleOptions(%v) = %v, want exactly %v", tt.state, seen, tt.want)
+			}
+		})
+	}
+}
+
 // TestDeployRow renders one history line: when it ran, against what it did.
 func TestDeployRow(t *testing.T) {
 	row := deployRow(store.Deploy{

@@ -403,24 +403,58 @@ func daemonUp(ctx context.Context, url string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+// daemonLifecycle is the state statusMenuOptions offers actions for: whether
+// systemd manages the daemon at all, and if it does, whether the daemon is
+// running. Splitting this out of statusMenuOptions lets the invariant — never
+// offer both start and stop — be tested by passing a state directly, instead
+// of only through the real systemd.Available() a dev box without systemd
+// always resolves the same way.
+type daemonLifecycle int
+
+const (
+	daemonUnmanaged daemonLifecycle = iota // no systemd on this host: nothing to offer
+	daemonActive                           // systemd manages it and it is running
+	daemonInactive                         // systemd manages it and it is not running
+)
+
+// currentDaemonLifecycle reads daemonLifecycle off the host.
+func currentDaemonLifecycle(ctx context.Context) daemonLifecycle {
+	if !systemd.Available() {
+		return daemonUnmanaged
+	}
+	if systemd.IsActive(ctx, daemonUnit) {
+		return daemonActive
+	}
+
+	return daemonInactive
+}
+
+// lifecycleOptions is the pure half of statusMenuOptions: given the daemon's
+// state, decide which service actions apply. A running daemon has nothing to
+// start; a stopped one has nothing to stop or restart.
+func lifecycleOptions(state daemonLifecycle) []ui.DescribedOption {
+	switch state {
+	case daemonActive:
+		return []ui.DescribedOption{
+			{Name: "restart", Description: "restart the webhook daemon", Value: "restart"},
+			{Name: "stop", Description: "stop the webhook daemon until it is started again", Value: "stop"},
+		}
+	case daemonInactive:
+		return []ui.DescribedOption{
+			{Name: "start", Description: "start the webhook daemon", Value: "start"},
+		}
+	default:
+		return nil
+	}
+}
+
 // statusMenuOptions are the actions the status screen offers below its report:
 // discovery, and the service lifecycle. Only the transition that applies is
 // offered — a running daemon has nothing to start.
 func statusMenuOptions(ctx context.Context) []ui.Option {
-	items := []ui.DescribedOption{
+	items := append([]ui.DescribedOption{
 		{Name: "scan", Description: "show every checkout discovery finds", Value: "scan"},
-	}
-
-	if systemd.Available() {
-		if systemd.IsActive(ctx, daemonUnit) {
-			items = append(items,
-				ui.DescribedOption{Name: "restart", Description: "restart the webhook daemon", Value: "restart"},
-				ui.DescribedOption{Name: "stop", Description: "stop the webhook daemon until it is started again", Value: "stop"},
-			)
-		} else {
-			items = append(items, ui.DescribedOption{Name: "start", Description: "start the webhook daemon", Value: "start"})
-		}
-	}
+	}, lifecycleOptions(currentDaemonLifecycle(ctx))...)
 
 	return append(ui.DescribedOptions(items...), ui.Option{Label: "Back", Value: "back"})
 }
