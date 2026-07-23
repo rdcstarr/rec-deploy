@@ -175,6 +175,34 @@ func TestPathLogBodyHeaderMatchesNonInteractiveFormat(t *testing.T) {
 	}
 }
 
+// TestRenderPathLogEndsInExactlyOneNewline pins the non-TTY byte output of
+// `rec-deploy logs --path`: it must print exactly what it printed before
+// pathLogBody was extracted for the interactive pane. pathLogBody already ends
+// every branch in "\n"; strings.Contains-only assertions elsewhere in this file
+// would not catch a second one appended on top, which is exactly what slipped
+// through when renderPathLog's human branch moved to ui.Out(pathLogBody(...)).
+func TestRenderPathLogEndsInExactlyOneNewline(t *testing.T) {
+	ui.SetColor(false)
+
+	out := capture(t, func() {
+		if err := renderPathLog(
+			store.Deploy{},
+			store.DeployPath{Path: "/var/www/api", Commands: "[]"},
+			"rdcstarr/rec-tools",
+		); err != nil {
+			t.Fatalf("renderPathLog: %v", err)
+		}
+	})
+
+	const wantSuffix = "this deploy ran no command on this path\n"
+	if !strings.HasSuffix(out, wantSuffix) {
+		t.Fatalf("output does not end with %q:\n%q", wantSuffix, out)
+	}
+	if strings.HasSuffix(out, "\n\n") {
+		t.Errorf("output ends with a blank line rec-deploy logs --path did not print before:\n%q", out)
+	}
+}
+
 // TestPathLogBodySaysWhenNothingRan pins that a deploy that ran no command says
 // so, rather than rendering an empty pane the operator has to interpret.
 func TestPathLogBodySaysWhenNothingRan(t *testing.T) {

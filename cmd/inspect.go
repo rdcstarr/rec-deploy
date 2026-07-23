@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -909,7 +910,12 @@ func renderPathLog(d store.Deploy, p store.DeployPath, repository string) error 
 		})
 	}
 
-	ui.Out(pathLogBody(d, p, repository))
+	// pathLogBody already ends every branch in "\n" — it also feeds ui.Document's
+	// Body for the interactive pane, which appends its own trailing newline
+	// unconditionally. ui.Out would add a second "\n" here and change the
+	// non-TTY byte output this format is pinned to; fmt.Fprint prints the string
+	// as built, and leaves pathLogBody itself untouched for the pane.
+	fmt.Fprint(os.Stdout, pathLogBody(d, p, repository))
 
 	return nil
 }
