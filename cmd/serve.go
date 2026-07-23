@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/rdcstarr/rec-deploy/internal/server"
 	"github.com/rdcstarr/rec-deploy/internal/sshkey"
 	"github.com/rdcstarr/rec-deploy/internal/store"
+	"github.com/rdcstarr/rec-deploy/internal/systemd"
 	"github.com/rdcstarr/rec-deploy/internal/ui"
 )
 
@@ -30,11 +32,14 @@ func newServeCmd() *cobra.Command {
 	var listen string
 
 	cmd := &cobra.Command{
-		Use:     "serve",
-		Short:   "Run the webhook daemon",
-		Long:    "serve receives GitHub push webhooks and deploys every checkout of the pushed repository on this server.",
-		Args:    cobra.NoArgs,
-		Example: "rec-deploy serve\nrec-deploy serve --listen 127.0.0.1:9000",
+		Use:   "serve",
+		Short: "Run the webhook daemon",
+		Long: "serve receives GitHub push webhooks and deploys every checkout of the pushed repository on this server. " +
+			"It is the process systemd runs (rec-deploy.service) rather than something to start by hand: " +
+			"start, stop and restart it from `rec-deploy status`, and read what it is doing with `journalctl -u rec-deploy -f`.",
+		Args:        cobra.NoArgs,
+		Annotations: map[string]string{annotationInteractive: "false"},
+		Example:     "rec-deploy serve\nrec-deploy serve --listen 127.0.0.1:9000",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
@@ -48,6 +53,10 @@ func newServeCmd() *cobra.Command {
 			cfg := Config()
 			if listen != "" {
 				cfg.Listen = listen
+			}
+
+			if err := serveGuard(ctx, cfg.Listen); err != nil {
+				return err
 			}
 
 			st, err := openStore(ctx)
@@ -160,6 +169,29 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&listen, "listen", "", "address to bind (default from config)")
 
 	return cmd
+}
+
+// serveGuard refuses to start a second daemon beside the one systemd is already
+// running. It has to run before anything else in serve: ReconcileInterrupted
+// settles deploys that a killed process left `running`, and against a live
+// daemon that means stamping its in-flight deploys `interrupted`. Their
+// deliveries are already recorded, so a redelivery is a no-op 200 and nothing
+// would ever deploy them again.
+//
+// The port probe races anything that binds between the check and the real
+// listen; that is fine. Its job is to fail before the state is touched, not to
+// be the only thing that reports a busy port.
+func serveGuard(ctx context.Context, listen string) error {
+	if systemd.Available() && systemd.IsActive(ctx, daemonUnit) {
+		return fmt.Errorf("%s is already running this daemon — follow it with `journalctl -u %s -f`, or stop it first with `systemctl stop %s`", daemonUnit, daemonUnit, daemonUnit)
+	}
+
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		return fmt.Errorf("%s is already in use — read the daemon's log with `journalctl -u %s -f`, or serve elsewhere with `rec-deploy serve --listen host:port`: %w", listen, daemonUnit, err)
+	}
+
+	return ln.Close()
 }
 
 // reloadConfig re-reads the config file at file and returns the fresh value,

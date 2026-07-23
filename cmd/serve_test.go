@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rdcstarr/rec-deploy/internal/config"
@@ -113,5 +115,55 @@ func writeNotifyConfig(t *testing.T, path, to string) {
 	body := "notify:\n  email:\n    to: " + to + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+// TestServeGuardRefusesABusyAddress pins that serve refuses before it touches
+// any state. ReconcileInterrupted runs a few lines later and would stamp the
+// live daemon's in-flight deploys `interrupted` — and because their deliveries
+// are already recorded, a redelivery is a no-op 200 and nothing would ever
+// deploy them again.
+func TestServeGuardRefusesABusyAddress(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	err = serveGuard(context.Background(), ln.Addr().String())
+	if err == nil {
+		t.Fatal("serve accepted an address another process is already serving")
+	}
+	if !strings.Contains(err.Error(), "journalctl") {
+		t.Errorf("the error must point at how to read the running daemon, got: %v", err)
+	}
+}
+
+// TestServeGuardAcceptsAFreeAddress pins that the guard does not refuse a
+// legitimate run — `serve --listen` on a free port stays possible.
+func TestServeGuardAcceptsAFreeAddress(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := serveGuard(context.Background(), addr); err != nil {
+		t.Fatalf("serve refused a free address: %v", err)
+	}
+}
+
+// TestServeIsNotAHubEntry pins that the daemon systemd runs is not offered as
+// something to pick from a menu, while staying typable and in --help.
+func TestServeIsNotAHubEntry(t *testing.T) {
+	cmd := newServeCmd()
+	if cmd.Annotations[annotationInteractive] != "false" {
+		t.Error("serve must be excluded from the interactive hub")
+	}
+	if cmd.Hidden {
+		t.Error("serve must stay in --help and in shell completion")
 	}
 }
