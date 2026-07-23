@@ -146,8 +146,6 @@ func isInteractive() bool {
 func rootMenu(cmd *cobra.Command) error {
 	ui.Banner(buildinfo.Resolved())
 
-	options := hubOptions(cmd)
-
 	for {
 		if ui.Quitting() {
 			return ui.ErrQuit
@@ -157,7 +155,7 @@ func rootMenu(cmd *cobra.Command) error {
 		// subcommand's PersistentPreRunE overwrites menuHelp, so reset it here.
 		menuHelp = commandHelp(cmd)
 
-		choice, err := selectMenu("rec-deploy — choose a command", options)
+		choice, err := selectMenu("rec-deploy — choose a command", hubOptions())
 		if err != nil {
 			return err
 		}
@@ -181,38 +179,44 @@ func rootMenu(cmd *cobra.Command) error {
 	}
 }
 
-// hubOptions builds the command hub's option list: every browsable subcommand,
-// labelled with its name padded to a fixed column and a dimmed Short. help and
-// completion are cobra's own plumbing rather than operator commands, so they are
-// left out, as are Hidden commands. uninstall is intentionally included — its
-// root check and confirmation wizard are what guard it, not its absence here.
-func hubOptions(cmd *cobra.Command) []ui.Option {
-	var visible []*cobra.Command
-	width := 0
-	for _, c := range cmd.Commands() {
-		if c.Hidden || c.Name() == "help" || c.Name() == "completion" || c.Annotations[annotationInteractive] == "false" {
-			continue
-		}
+// hubEntry is one root menu entry: the command it runs, and why an operator
+// would pick it.
+type hubEntry struct {
+	Command     string
+	Description string
+}
 
-		visible = append(visible, c)
-		if n := len(c.Name()); n > width {
-			width = n
-		}
+// hubEntries is the root menu, written by hand rather than reflected from the
+// command tree so it can be ordered by how often each command is reached for
+// and so a command can exist without crowding the first screen. The labels are
+// the real command names: what an operator reads here has to be what they can
+// type. TestEveryCommandIsReachable is what keeps this list honest.
+var hubEntries = []hubEntry{
+	{"deploy", "deploy a repository now"},
+	{"repo", "register, install and administer repositories"},
+	{"logs", "browse the deploy history"},
+	{"status", "daemon, units and discovered checkouts"},
+	{"config", "server, GitHub, discovery and notifications"},
+	{"mcp", "remote read-only access for AI clients"},
+	{"self-update", "check for and install a new release"},
+	{"uninstall", "remove rec-deploy from this server"},
+}
+
+// hubOptions builds the command hub's option list. Setup leads it until it has
+// been done — every other entry is useless on a server with no token, and the
+// entry is noise on one that has been configured for months.
+func hubOptions() []ui.Option {
+	entries := hubEntries
+	if !initialized() {
+		entries = append([]hubEntry{{"init", "first-time setup: token, listen address, discovery, notifications"}}, entries...)
 	}
 
-	options := make([]ui.Option, 0, len(visible))
-	for _, c := range visible {
-		label := c.Name()
-		if c.Short != "" {
-			// Pad the name to a fixed column so descriptions align, and dim the
-			// description so the command name stands out.
-			label = c.Name() + strings.Repeat(" ", width-len(c.Name())) + "   " + ui.Dim(c.Short)
-		}
-
-		options = append(options, ui.Option{Label: label, Value: c.Name()})
+	items := make([]ui.DescribedOption, 0, len(entries))
+	for _, e := range entries {
+		items = append(items, ui.DescribedOption{Name: e.Command, Description: e.Description, Value: e.Command})
 	}
 
-	return options
+	return ui.DescribedOptions(items...)
 }
 
 // dispatch runs the subcommand named name of cmd, as chosen from an interactive

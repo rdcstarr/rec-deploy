@@ -13,9 +13,10 @@ import (
 // build-info view (Cobra's --version gives the one-line form).
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "version",
-		Short: "Print version and build information",
-		Args:  cobra.NoArgs,
+		Use:         "version",
+		Short:       "Print version and build information",
+		Args:        cobra.NoArgs,
+		Annotations: map[string]string{annotationInteractive: "false"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flagJSON {
 				return ui.PrintJSON(map[string]string{
