@@ -187,13 +187,18 @@ func TestConfigMenuOptionsCarryDescriptions(t *testing.T) {
 
 // TestNotificationSectionsOfferATest pins that notify leaves the hub with a
 // home: sending a test message belongs beside the settings it exercises, and
-// the notification sections are the only interactive way to it now.
+// the notification sections are the only interactive way to it now. The
+// negative half is driven off configSections rather than a hardcoded list of
+// non-notification sections, so a change that leaked "test" into every
+// section — including ones added later — cannot pass by omission.
 func TestNotificationSectionsOfferATest(t *testing.T) {
 	saved := cfg
 	defer func() { cfg = saved }()
 	cfg = &config.Config{}
 
-	for _, section := range []string{"telegram", "email"} {
+	notifySections := map[string]bool{"telegram": true, "email": true}
+
+	for section := range notifySections {
 		var found bool
 		for _, option := range configSectionOptions(section) {
 			if option.Value == "test" {
@@ -205,9 +210,14 @@ func TestNotificationSectionsOfferATest(t *testing.T) {
 		}
 	}
 
-	for _, option := range configSectionOptions("server") {
-		if option.Value == "test" {
-			t.Error("the server section offers a notification test")
+	for _, section := range configSections {
+		if notifySections[section.Key] {
+			continue
+		}
+		for _, option := range configSectionOptions(section.Key) {
+			if option.Value == "test" {
+				t.Errorf("the %s section offers a notification test", section.Key)
+			}
 		}
 	}
 }

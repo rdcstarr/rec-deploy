@@ -80,7 +80,19 @@ func openConfigSection(cmd *cobra.Command, section string) error {
 		BackValues: map[string]bool{"back": true},
 		Handle: func(key string) error {
 			if key == "test" {
-				return dispatch(cmd.Root(), "notify")
+				// dispatch builds its argument list from cmd's own CommandPath,
+				// so dispatching straight from the root would resolve to
+				// ["notify"] — the group node — and open its one-entry submenu
+				// instead of running the leaf. Resolving the notify node first
+				// makes its CommandPath "rec-deploy notify", so dispatching
+				// "test" from it builds ["notify", "test"] and runs the leaf
+				// directly, the same way mcp.go reaches "token" from its parent.
+				notifyCmd, _, err := cmd.Root().Find([]string{"notify"})
+				if err != nil {
+					return err
+				}
+
+				return dispatch(notifyCmd, "test")
 			}
 
 			return configureConfigField(cmd.Context(), key)
