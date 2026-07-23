@@ -84,6 +84,22 @@ func TestCloneDestinationEntriesIncludesHiddenDirectories(t *testing.T) {
 	}
 }
 
+// TestRepoMenuOffersRollback pins that rollback is reachable from the
+// repository menu: it is not a hub entry, and a menu is the only interactive
+// way to it.
+func TestRepoMenuOffersRollback(t *testing.T) {
+	seen := make(map[string]bool)
+	for _, option := range repoMenuOptions() {
+		seen[option.Value] = true
+	}
+
+	for _, want := range []string{"add", "list", "show", "install", "rotate", "remove", "rollback"} {
+		if !seen[want] {
+			t.Errorf("repo menu does not offer %q: %v", want, seen)
+		}
+	}
+}
+
 func TestClearDirectoryContentsPreservesRootAndDoesNotFollowSymlink(t *testing.T) {
 	path := t.TempDir()
 	target := t.TempDir()

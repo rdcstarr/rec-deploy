@@ -52,20 +52,32 @@ func newRepoCmd() *cobra.Command {
 // returns ui.ErrBack, so ← climbs to the rec-deploy hub.
 func repoMenu(cmd *cobra.Command) error {
 	return (ui.Menu{
-		Title: ui.ScreenPath("rec-deploy", "Repositories"),
-		Options: func() []ui.Option {
-			return []ui.Option{
-				{Label: "add     " + ui.Dim("register a repository: deploy key + webhook"), Value: "add"},
-				{Label: "list    " + ui.Dim("every registered repository"), Value: "list"},
-				{Label: "show    " + ui.Dim("one repository and its installations"), Value: "show"},
-				{Label: "install " + ui.Dim("clone a repository into a path"), Value: "install"},
-				{Label: "rotate  " + ui.Dim("roll the webhook secret and the deploy key"), Value: "rotate"},
-				{Label: "remove  " + ui.Dim("delete the key and the webhook on GitHub"), Value: "remove"},
+		Title:   ui.ScreenPath("rec-deploy", "Repositories"),
+		Options: repoMenuOptions,
+		Help:    func() string { return commandHelp(cmd) },
+		Handle: func(choice string) error {
+			// rollback is a top-level command, so it dispatches from the root.
+			if choice == "rollback" {
+				return dispatch(cmd.Root(), choice)
 			}
+
+			return dispatch(cmd, choice)
 		},
-		Help:   func() string { return commandHelp(cmd) },
-		Handle: func(choice string) error { return dispatch(cmd, choice) },
 	}).Run()
+}
+
+// repoMenuOptions lists what an operator does to a repository, ending with the
+// two that undo work.
+func repoMenuOptions() []ui.Option {
+	return ui.DescribedOptions(
+		ui.DescribedOption{Name: "add", Description: "register a repository: deploy key + webhook", Value: "add"},
+		ui.DescribedOption{Name: "list", Description: "every registered repository", Value: "list"},
+		ui.DescribedOption{Name: "show", Description: "one repository and its installations", Value: "show"},
+		ui.DescribedOption{Name: "install", Description: "clone a repository into a path", Value: "install"},
+		ui.DescribedOption{Name: "rotate", Description: "roll the webhook secret and the deploy key", Value: "rotate"},
+		ui.DescribedOption{Name: "rollback", Description: "restore a checkout to the commit before its last deploy", Value: "rollback"},
+		ui.DescribedOption{Name: "remove", Description: "delete the key and the webhook on GitHub", Value: "remove"},
+	)
 }
 
 // newRepoAddCmd builds `repo add owner/repo`: generate the deploy key, upload it
