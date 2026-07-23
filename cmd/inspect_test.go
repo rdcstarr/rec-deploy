@@ -134,6 +134,45 @@ func TestPathLogBodyRendersEveryCommand(t *testing.T) {
 			t.Errorf("the output pane is missing %q:\n%s", want, body)
 		}
 	}
+
+	// Both commands' "exit N" text appears in the body regardless of which one
+	// failed, so the marker is the only thing that distinguishes them — check
+	// it positionally, attached to each command's own line, not merely that ✓
+	// occurs somewhere in a body that also contains a failing command.
+	if !strings.Contains(body, ui.Good("✓")+" $ composer install") {
+		t.Errorf("the passing command is not marked with ✓:\n%s", body)
+	}
+	if strings.Contains(body, ui.Alert("!")+" $ composer install") {
+		t.Errorf("the passing command carries the failure marker:\n%s", body)
+	}
+	if !strings.Contains(body, ui.Alert("!")+" $ npm run build") {
+		t.Errorf("the failing command is not marked with !:\n%s", body)
+	}
+	if strings.Contains(body, ui.Good("✓")+" $ npm run build") {
+		t.Errorf("the failing command carries the success marker:\n%s", body)
+	}
+}
+
+// TestPathLogBodyHeaderMatchesNonInteractiveFormat pins the hard requirement
+// behind `logs --path`: its non-TTY output must print exactly what it printed
+// before this pane existed, ui.KeyValue's "key: value" form — colon, fixed
+// width key column, plain value — not ui.TwoCol's two-space indent, dropped
+// colon and dynamically sized column. A check on the value alone would pass
+// against both, since both carry the same field names; the literal string
+// below is what tells them apart.
+func TestPathLogBodyHeaderMatchesNonInteractiveFormat(t *testing.T) {
+	ui.SetColor(false)
+
+	body := pathLogBody(
+		store.Deploy{StartedAt: time.Date(2026, 7, 23, 12, 4, 31, 0, time.UTC)},
+		store.DeployPath{Path: "/var/www/api", User: "www-data", Status: store.StatusSuccess, Commands: "[]"},
+		"rdcstarr/rec-tools",
+	)
+
+	const want = "repository: rdcstarr/rec-tools"
+	if !strings.Contains(body, want) {
+		t.Errorf("header line does not match ui.KeyValue's %q form:\n%s", want, body)
+	}
 }
 
 // TestPathLogBodySaysWhenNothingRan pins that a deploy that ran no command says

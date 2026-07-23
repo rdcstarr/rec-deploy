@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -712,6 +713,17 @@ func pathLog(ctx context.Context, slug, path string) error {
 // deploys, then the checkouts of one deploy, then what each command of one
 // checkout printed. It replaces a printed list that told the operator which
 // flags to type next.
+//
+// The two ways to reach this browser are not symmetric. `rec-deploy logs
+// <owner/repo>` names its repository on the command line: there is no picker
+// above the deploy list, so Esc on it is the top of this screen and ui.ErrBack
+// must keep propagating, the same way it does from every other command
+// launched directly. `rec-deploy logs` with no argument opens pickLogsRepo
+// first: that picker is now a navigation level of its own, so Esc on the
+// deploy list has somewhere to land that isn't the rec-deploy hub. Looping
+// over "pick a repository, then browse it" — instead of picking once above a
+// single Run — is what gives it that landing spot; collapsing the loop back
+// into a single call would silently reintroduce the skip.
 func logsBrowser(ctx context.Context, slug string, limit int) error {
 	st, err := openStore(ctx)
 	if err != nil {
@@ -719,17 +731,30 @@ func logsBrowser(ctx context.Context, slug string, limit int) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	if slug == "" {
-		picked, err := pickLogsRepo(ctx, st)
-		if err != nil {
+	if slug != "" {
+		if _, err := registeredRepo(ctx, st, slug); err != nil {
 			return err
 		}
-		slug = picked
-	}
-	if _, err := registeredRepo(ctx, st, slug); err != nil {
-		return err
+
+		return logsDeployMenu(ctx, st, slug, limit)
 	}
 
+	for {
+		picked, err := pickLogsRepo(ctx, st)
+		if err != nil {
+			return err // ui.ErrBack (climb to the hub) or ui.ErrQuit (quit)
+		}
+
+		if err := logsDeployMenu(ctx, st, picked, limit); !errors.Is(err, ui.ErrBack) {
+			return err
+		}
+	}
+}
+
+// logsDeployMenu lists one repository's deploys and opens the one the
+// operator picks. ui.ErrBack from Esc on the list itself is read differently
+// by logsBrowser's two entry paths — see its doc comment.
+func logsDeployMenu(ctx context.Context, st *store.Store, slug string, limit int) error {
 	return (ui.Menu{
 		Title:      ui.ScreenPath("rec-deploy", "Logs", slug),
 		SelectHelp: "open deploy",
@@ -893,23 +918,25 @@ func renderPathLog(d store.Deploy, p store.DeployPath, repository string) error 
 // every command with its exit code, duration and captured output. It builds a
 // string rather than printing so the same rendering serves `logs --path` and
 // the interactive browser's scrollable pane.
+//
+// The header is built from ui.KeyValueLine, not ui.TwoCol: `logs --path`'s
+// non-TTY output is a hard compatibility surface, and TwoCol's two-space
+// indent, dropped colon and dynamically sized column are a different format,
+// not a restyling of the same one.
 func pathLogBody(d store.Deploy, p store.DeployPath, repository string) string {
 	var b strings.Builder
 
 	b.WriteString(ui.Heading(p.Path) + "\n")
-	rows := [][2]string{
-		{"repository", repository},
-		{"when", d.StartedAt.Format(time.DateTime)},
-		{"status", p.Status},
-		{"user", strings.Join(userFlags(p), "  ")},
-	}
+	b.WriteString(ui.KeyValueLine("repository", repository) + "\n")
+	b.WriteString(ui.KeyValueLine("when", d.StartedAt.Format(time.DateTime)) + "\n")
+	b.WriteString(ui.KeyValueLine("status", p.Status) + "\n")
+	b.WriteString(ui.KeyValueLine("user", strings.Join(userFlags(p), "  ")) + "\n")
 	if p.NewSHA != "" {
-		rows = append(rows, [2]string{"commit", shortSHA(p.PreviousSHA) + " → " + shortSHA(p.NewSHA)})
+		b.WriteString(ui.KeyValueLine("commit", shortSHA(p.PreviousSHA)+" → "+shortSHA(p.NewSHA)) + "\n")
 	}
 	if p.Reason != "" {
-		rows = append(rows, [2]string{"reason", p.Reason})
+		b.WriteString(ui.KeyValueLine("reason", p.Reason) + "\n")
 	}
-	b.WriteString(ui.TwoCol(rows))
 
 	cmds := parseCommands(p.Commands)
 	if len(cmds) == 0 {

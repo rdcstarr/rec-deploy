@@ -36,9 +36,15 @@ func ScreenPath(parts ...string) string {
 // keyWidth is the padded width of the key column in KeyValue / KeyList.
 const keyWidth = 11
 
+// KeyValueLine returns the aligned "key: value" line KeyValue prints, for
+// composing a block rather than writing it a line at a time.
+func KeyValueLine(key, value string) string {
+	return render(StyleKey, fmt.Sprintf("%-*s", keyWidth, key+":")) + " " + value
+}
+
 // KeyValue prints an aligned "key: value" line with a subtle key.
 func KeyValue(key, value string) {
-	Outf("%s %s", render(StyleKey, fmt.Sprintf("%-*s", keyWidth, key+":")), value)
+	Out(KeyValueLine(key, value))
 }
 
 // KeyList prints a labelled list: the key on the first line, remaining values
