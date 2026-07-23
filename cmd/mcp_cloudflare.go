@@ -290,6 +290,94 @@ func waitMCPOrigin(ctx context.Context, listen, token string) error {
 	return lastErr
 }
 
+// cloudflareMCPProvisioned reports whether this server has a Cloudflare tunnel
+// and hostname that rec-deploy created and is therefore responsible for
+// removing. It reads the recorded IDs rather than MCP.Enabled: a half-disabled
+// install still owns the resources it made.
+func cloudflareMCPProvisioned(cfg *config.Config) bool {
+	return cfg != nil && cfg.MCP.Mode == "cloudflare" &&
+		(cfg.MCP.Cloudflare.TunnelID != "" || cfg.MCP.Cloudflare.DNSRecordID != "")
+}
+
+// cloudflareCleanupClient builds the API client a removal needs. Provisioning
+// through an API token stored it, so nothing is asked for. A browser-authorized
+// install stored none, and a terminal is offered the chance to paste one rather
+// than being told afterwards that a tunnel was orphaned; a non-interactive run
+// says plainly that it cannot.
+func cloudflareCleanupClient(ctx context.Context, cf config.CloudflareConfig) (*cloudflare.Client, error) {
+	token := strings.TrimSpace(cf.APIToken)
+	if token == "" {
+		if !isInteractive() {
+			return nil, fmt.Errorf("this endpoint was authorized through the browser, so no API token is stored — delete tunnel %q in the Cloudflare dashboard, or re-run in a terminal to paste a token", cf.TunnelName)
+		}
+
+		entered, err := ui.SecretPrompt("Cloudflare Account API token",
+			"Needed to delete the tunnel and DNS record rec-deploy created; this install was authorized through the browser, so none is stored. Leave empty to skip and remove them in the Cloudflare dashboard yourself.", "")
+		if err != nil {
+			return nil, err
+		}
+		if token = strings.TrimSpace(entered); token == "" {
+			return nil, fmt.Errorf("no Cloudflare token given — delete tunnel %q in the dashboard yourself", cf.TunnelName)
+		}
+	}
+
+	c := cloudflare.NewClient(token)
+	if err := ui.Spinner("Validating Cloudflare account access…", func() error {
+		return c.VerifyAccount(ctx, cf.AccountID)
+	}); err != nil {
+		return nil, err
+	}
+
+	return c, nil
+}
+
+// stopMCPTunnel takes the connector down and reports whether it had been
+// running. Cloudflare refuses to delete a tunnel that still has a live
+// connection, so this has to happen before the tunnel is removed — and the
+// answer is what lets a failed removal put the endpoint back.
+func stopMCPTunnel(ctx context.Context) bool {
+	active := systemd.IsActive(ctx, mcpTunnelService)
+	if active {
+		_ = systemd.DisableNow(ctx, mcpTunnelService)
+	}
+
+	return active
+}
+
+// deleteCloudflareMCP removes the tunnel and the DNS record rec-deploy created,
+// from the IDs it recorded when it made them. It is the remote half of `mcp
+// disable`, split out because `uninstall` has to remove the same two resources:
+// erasing the local data takes the API token and the IDs with it, and a tunnel
+// nobody can name is a tunnel nobody deletes.
+//
+// A hostname whose record no longer points at our tunnel is left alone —
+// something else has taken the name over since, and this is not the command
+// that gets to break it.
+func deleteCloudflareMCP(ctx context.Context, c *cloudflare.Client, cf config.CloudflareConfig) error {
+	if cf.DNSRecordID == "" && cf.Hostname != "" {
+		record, err := c.FindDNS(ctx, cf.Hostname)
+		if err != nil {
+			return err
+		}
+		if record.ID != "" && strings.EqualFold(strings.TrimSuffix(record.Content, "."), cloudflare.TunnelTarget(cf.TunnelID)) {
+			cf.DNSRecordID, cf.ZoneID = record.ID, record.ZoneID
+		}
+	}
+
+	if cf.DNSRecordID != "" {
+		if err := c.DeleteDNS(ctx, cf.ZoneID, cf.DNSRecordID); err != nil {
+			return fmt.Errorf("delete Cloudflare DNS record: %w", err)
+		}
+	}
+	if cf.TunnelID != "" {
+		if err := c.DeleteTunnel(ctx, cf.AccountID, cf.TunnelID); err != nil {
+			return fmt.Errorf("delete Cloudflare tunnel: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func disableCloudflareMCP(ctx context.Context) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("cloudflare cleanup changes system services — run `sudo rec-deploy mcp disable`")
@@ -328,36 +416,18 @@ func disableCloudflareMCP(ctx context.Context) error {
 	if err := c.VerifyAccount(ctx, accountID); err != nil {
 		return err
 	}
-	wasActive := systemd.IsActive(ctx, mcpTunnelService)
-	if wasActive {
-		_ = systemd.DisableNow(ctx, mcpTunnelService)
-	}
 	cf := cfg.MCP.Cloudflare
-	if cf.DNSRecordID == "" && cf.Hostname != "" {
-		record, findErr := c.FindDNS(ctx, cf.Hostname)
-		if findErr != nil {
-			if wasActive {
-				_ = systemd.EnableNow(ctx, mcpTunnelService)
-			}
-			return findErr
+	wasActive := stopMCPTunnel(ctx)
+	if err := deleteCloudflareMCP(ctx, c, cf); err != nil {
+		// Put the endpoint back the way it was found. Previously only a failure
+		// before the DNS record was deleted restored the connector; restoring it
+		// after leaves a tunnel serving a hostname that is already gone, which
+		// is harmless and self-corrects on the next disable or uninstall.
+		if wasActive {
+			_ = systemd.EnableNow(ctx, mcpTunnelService)
 		}
-		want := cf.TunnelID + ".cfargotunnel.com"
-		if record.ID != "" && strings.EqualFold(strings.TrimSuffix(record.Content, "."), want) {
-			cf.DNSRecordID, cf.ZoneID, cf.ZoneName = record.ID, record.ZoneID, record.ZoneName
-		}
-	}
-	if cf.DNSRecordID != "" {
-		if err := c.DeleteDNS(ctx, cf.ZoneID, cf.DNSRecordID); err != nil {
-			if wasActive {
-				_ = systemd.EnableNow(ctx, mcpTunnelService)
-			}
-			return fmt.Errorf("delete Cloudflare DNS record: %w", err)
-		}
-	}
-	if cf.TunnelID != "" {
-		if err := c.DeleteTunnel(ctx, cf.AccountID, cf.TunnelID); err != nil {
-			return fmt.Errorf("delete Cloudflare tunnel: %w", err)
-		}
+
+		return err
 	}
 	_ = systemd.DisableNow(ctx, mcpService)
 	_ = systemd.DisableNow(ctx, mcpUpdateTimer)

@@ -24,23 +24,25 @@ import (
 var unitFiles = units.Names
 
 func newUninstallCmd() *cobra.Command {
-	var keepGitHub, keepData bool
+	var keepGitHub, keepData, keepCloudflare bool
 
 	cmd := &cobra.Command{
 		Use:   "uninstall",
 		Short: "Remove rec-deploy from this server",
 		Long: "uninstall deletes the deploy keys and webhooks on GitHub for every registered\n" +
-			"repository, stops and removes the systemd units, deletes the configuration and\n" +
-			"state (token, HMAC secrets, deploy keys, database) and removes the binary.\n" +
+			"repository, deletes the Cloudflare tunnel and hostname behind remote MCP, stops\n" +
+			"and removes the systemd units, deletes the configuration and state (token, HMAC\n" +
+			"secrets, deploy keys, database) and removes the binary.\n" +
 			"The deployed checkouts on disk are never touched.",
 		Example: "rec-deploy uninstall --yes --keep-github",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runUninstall(cmd.Context(), keepGitHub, keepData)
+			return runUninstall(cmd.Context(), keepGitHub, keepCloudflare, keepData)
 		},
 	}
 
 	cmd.Flags().BoolVar(&keepGitHub, "keep-github", false, "leave the deploy keys and webhooks on GitHub (and the local records)")
+	cmd.Flags().BoolVar(&keepCloudflare, "keep-cloudflare", false, "leave the remote MCP tunnel and hostname in the Cloudflare account")
 	cmd.Flags().BoolVar(&keepData, "keep-data", false, "leave the configuration and state directories in place")
 
 	return cmd
@@ -48,7 +50,7 @@ func newUninstallCmd() *cobra.Command {
 
 // runUninstall drives the whole removal: inventory, wizard, GitHub cleanup
 // with its failure gate, then the local engine, then the report.
-func runUninstall(ctx context.Context, keepGitHub, keepData bool) error {
+func runUninstall(ctx context.Context, keepGitHub, keepCloudflare, keepData bool) error {
 	if os.Geteuid() != 0 {
 		dir, _ := config.Dir()
 		return fmt.Errorf("uninstall removes system paths — run it as root; a non-root setup is removed with just  rm -rf %s", dir)
@@ -77,8 +79,15 @@ func runUninstall(ctx context.Context, keepGitHub, keepData bool) error {
 			ui.Warn("cannot read the registered repositories: " + err.Error())
 		}
 	}
+	// Read before any question, like the repository inventory: the operator is
+	// told what exists, not asked about a resource that may not.
+	hasCloudflare := cloudflareMCPProvisioned(Config())
+
 	if !flagJSON {
 		ui.Info(fmt.Sprintf("this removes rec-deploy from this server: %d registered repositories, the systemd units, %s, %s and %s", len(repos), confDir, stateDir, bin))
+		if hasCloudflare {
+			ui.Info("and the Cloudflare tunnel and hostname behind remote MCP: " + Config().MCP.Cloudflare.Hostname)
+		}
 		ui.Info("the deployed checkouts on disk stay untouched")
 	}
 
@@ -102,6 +111,14 @@ func runUninstall(ctx context.Context, keepGitHub, keepData bool) error {
 				return err
 			}
 			keepGitHub = !ok
+		}
+		if !keepCloudflare && hasCloudflare {
+			ok, err := ui.Confirm("Also delete the Cloudflare tunnel and hostname behind remote MCP?",
+				"Answering no leaves "+Config().MCP.Cloudflare.Hostname+" and its tunnel in your Cloudflare account, with the credentials to remove them about to be erased from this server.")
+			if err != nil {
+				return err
+			}
+			keepCloudflare = !ok
 		}
 		if !keepData {
 			ok, err := ui.Confirm("Delete the local data — GitHub token, HMAC secrets, deploy keys, state database?",
@@ -146,22 +163,40 @@ func runUninstall(ctx context.Context, keepGitHub, keepData bool) error {
 			}
 		}
 		_ = st.Close()
+	}
 
-		// The gate: deleting the data below destroys the token and the IDs —
-		// after that nobody can finish this cleanup. Stop unless the operator
-		// explicitly accepts the orphans.
-		if len(failed) > 0 && !keepData {
-			if !isInteractive() {
-				return fmt.Errorf("github cleanup failed for %d repositories — fix connectivity and re-run, or re-run with `--keep-github`", len(failed))
+	// Phase 1b: Cloudflare, still before the data goes — the API token and the
+	// tunnel's own ID both live in the config about to be deleted, and a tunnel
+	// nobody can name is a tunnel nobody deletes.
+	cloudflareRemoved := false
+	var cloudflareErr error
+	if !keepCloudflare && hasCloudflare {
+		cloudflareErr = removeCloudflareMCP(ctx)
+		switch {
+		case cloudflareErr == nil:
+			cloudflareRemoved = true
+			if !flagJSON {
+				ui.Success("deleted the Cloudflare tunnel and hostname")
 			}
-			ok, err := ui.Confirm(fmt.Sprintf("GitHub cleanup failed for %d repositories — delete the local data anyway?", len(failed)),
-				"The keys and webhooks would stay orphaned on GitHub with nothing left here to remove them.")
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return errors.New("uninstall stopped — nothing local was removed")
-			}
+		case !flagJSON:
+			ui.Warn("cloudflare cleanup failed: " + cloudflareErr.Error())
+		}
+	}
+
+	// The gate: deleting the data below destroys the GitHub token, the stored
+	// IDs and the Cloudflare credentials — after that nobody can finish either
+	// cleanup. Stop unless the operator explicitly accepts the orphans.
+	if orphans := len(failed) + boolToInt(cloudflareErr != nil); orphans > 0 && !keepData {
+		if !isInteractive() {
+			return fmt.Errorf("remote cleanup failed for %d resources — fix connectivity and re-run, or re-run with `--keep-github` / `--keep-cloudflare`", orphans)
+		}
+		ok, err := ui.Confirm(fmt.Sprintf("Remote cleanup failed for %d resources — delete the local data anyway?", orphans),
+			"They would stay orphaned on GitHub or in Cloudflare with nothing left here to remove them.")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("uninstall stopped — nothing local was removed")
 		}
 	}
 
@@ -176,8 +211,9 @@ func runUninstall(ctx context.Context, keepGitHub, keepData bool) error {
 
 	if flagJSON {
 		return ui.PrintJSON(map[string]any{
-			"github": map[string]any{"cleaned": cleaned, "already_gone": gone, "failed": failed, "kept": keepGitHub},
-			"report": rep,
+			"github":     map[string]any{"cleaned": cleaned, "already_gone": gone, "failed": failed, "kept": keepGitHub},
+			"cloudflare": map[string]any{"provisioned": hasCloudflare, "removed": cloudflareRemoved, "kept": keepCloudflare, "error": errorText(cloudflareErr)},
+			"report":     rep,
 		})
 	}
 
@@ -198,13 +234,51 @@ func runUninstall(ctx context.Context, keepGitHub, keepData bool) error {
 		ui.Info("installed via a package — finish with:  dpkg -r " + rep.Package + "  (or `rpm -e`)")
 	}
 
-	if rep.Failed() || len(failed) > 0 {
+	if rep.Failed() || len(failed) > 0 || cloudflareErr != nil {
 		return errors.New("uninstall finished with failures — see the lines above; a re-run finishes what is left")
 	}
 
 	ui.Success("rec-deploy removed — the deployed checkouts on disk are untouched")
 
 	return nil
+}
+
+// removeCloudflareMCP deletes the tunnel and the hostname behind remote MCP. It
+// takes the connector down first: Cloudflare refuses to delete a tunnel that
+// still has a live connection, and uninstall.Run only stops the units later.
+func removeCloudflareMCP(ctx context.Context) error {
+	cf := Config().MCP.Cloudflare
+
+	client, err := cloudflareCleanupClient(ctx, cf)
+	if err != nil {
+		return err
+	}
+
+	_ = stopMCPTunnel(ctx)
+
+	return ui.Spinner("Deleting the Cloudflare tunnel and hostname…", func() error {
+		return deleteCloudflareMCP(ctx, client, cf)
+	})
+}
+
+// boolToInt counts a condition, so the orphan gate can add a single Cloudflare
+// failure to a list of failed repositories without two near-identical branches.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+
+	return 0
+}
+
+// errorText renders err for --json, where a nil error must read as absent
+// rather than as the string "nil".
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	return err.Error()
 }
 
 // registeredRepos lists every registered repository, opening the store, reading

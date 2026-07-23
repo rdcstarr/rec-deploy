@@ -327,3 +327,33 @@ func TestTunnelNameForSurvivesAReusedSubdomain(t *testing.T) {
 		t.Errorf("reusing a subdomain produced the same tunnel name twice (%q) — the second install would be rejected", first)
 	}
 }
+
+// TestCloudflareMCPProvisionedTracksTheResourcesNotTheSwitch is what decides
+// whether uninstall has a tunnel to delete. It reads the recorded IDs rather
+// than MCP.Enabled on purpose: a half-disabled install still owns whatever it
+// created, and keying off the switch would walk past an orphan.
+func TestCloudflareMCPProvisionedTracksTheResourcesNotTheSwitch(t *testing.T) {
+	if cloudflareMCPProvisioned(nil) {
+		t.Error("a nil config reported provisioned resources")
+	}
+	if cloudflareMCPProvisioned(&config.Config{}) {
+		t.Error("a server that never enabled MCP reported provisioned resources")
+	}
+
+	disabled := &config.Config{MCP: config.MCPConfig{
+		Enabled:    false,
+		Mode:       "cloudflare",
+		Cloudflare: config.CloudflareConfig{TunnelID: "t1", Hostname: "mcp-abc.example.com"},
+	}}
+	if !cloudflareMCPProvisioned(disabled) {
+		t.Error("a disabled install still owns its tunnel; uninstall would leave it orphaned")
+	}
+
+	recordOnly := &config.Config{MCP: config.MCPConfig{
+		Mode:       "cloudflare",
+		Cloudflare: config.CloudflareConfig{DNSRecordID: "d1"},
+	}}
+	if !cloudflareMCPProvisioned(recordOnly) {
+		t.Error("a hostname with no tunnel id is still ours to remove")
+	}
+}

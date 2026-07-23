@@ -242,18 +242,26 @@ One command removes everything the installer and the wizard created:
 rec-deploy uninstall
 ```
 
-Interactively it shows what it found, then asks two questions: whether to also
-delete the deploy keys and webhooks on GitHub for every registered repository
-(recommended — otherwise they stay there, pushing into a dead endpoint), and
+Interactively it shows what it found, then asks: whether to also delete the
+deploy keys and webhooks on GitHub for every registered repository (recommended
+— otherwise they stay there, pushing into a dead endpoint), whether to delete
+the Cloudflare tunnel and hostname behind remote MCP if one was provisioned, and
 whether to delete the local data (token, HMAC secrets, deploy keys, state
-database). Non-interactively it requires `--yes`, with `--keep-github` /
-`--keep-data` for the same choices.
+database). Non-interactively it requires `--yes`, with `--keep-github`,
+`--keep-cloudflare` and `--keep-data` for the same choices.
 
-The GitHub cleanup runs first, while the token and the stored IDs still exist;
-if any of it fails, uninstall stops before destroying the data they live in.
+Both remote cleanups run first, while the credentials and the stored IDs still
+exist; if either fails, uninstall stops before destroying the data they live in,
+because a tunnel or a webhook nobody can name is one nobody deletes. An endpoint
+authorized through the browser stored no Cloudflare API token, so a terminal is
+offered the chance to paste one — leaving it empty skips that cleanup and names
+the tunnel to remove in the dashboard.
+
 Installs from a `.deb`/`.rpm` keep their binary and unit files — finish those
-with `dpkg -r rec-deploy` / `rpm -e rec-deploy`. The deployed checkouts on
-disk are never touched.
+with `dpkg -r rec-deploy` / `rpm -e rec-deploy`. The deployed checkouts on disk
+are never touched, and the GitHub token itself is not revoked: rec-deploy did
+not create it, so only its local copy is deleted — revoke it at
+<https://github.com/settings/tokens> if you want it gone.
 
 ## The manifest — `.rec-deploy.yml` or `.rec-deploy.yaml`
 
@@ -380,7 +388,7 @@ rec-deploy notify test                  # send a test notification and report ea
 
 rec-deploy config get <key> | set <key> <value> | path
 rec-deploy self-update                  # SHA-256 verified against checksums.txt; fails closed
-rec-deploy uninstall [--keep-github] [--keep-data]   # removes services, local data and github deploy keys/webhooks
+rec-deploy uninstall [--keep-github] [--keep-cloudflare] [--keep-data]   # removes services, local data, github keys/webhooks and the MCP tunnel
 rec-deploy completion [bash|zsh|fish|powershell]
 rec-deploy version
 ```
