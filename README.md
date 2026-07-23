@@ -349,8 +349,8 @@ summary, or an error naming the flag. Destructive actions confirm in a TTY and r
 `--yes` otherwise.
 
 The bare `rec-deploy` hub above is curated, not exhaustive: `deploy`, `repo`, `logs`,
-`status`, `config`, `mcp`, `self-update` and `uninstall`, plus `init` until the server has
-a token configured. `rollback` and `scan` are reached from the `repo` and `status` menus,
+`status`, `config`, `mcp`, `self-update` and `uninstall`, plus `init` until the setup
+wizard has run to completion. `rollback` and `scan` are reached from the `repo` and `status` menus,
 and `notify test` from the Telegram/Email sections of `config` — every command above stays
 fully typable and listed in `--help` whether or not the hub shows it on its first screen.
 
