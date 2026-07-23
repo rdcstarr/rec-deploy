@@ -161,3 +161,103 @@ func TestSendTelegramReturnsErrorWhenPlainRetryAlsoFails(t *testing.T) {
 		t.Errorf("calls = %d, want exactly 2 (no loop after the second failure)", calls)
 	}
 }
+
+// TestVerifyTelegramRejectsABadToken pins the point of verifying at all: a
+// token that is merely well-formed is worth nothing, and the operator has to
+// learn which half of the credentials the API refused.
+func TestVerifyTelegramRejectsABadToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/getMe") {
+			t.Errorf("verification called %s before getMe succeeded", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"description":"Unauthorized"}`))
+	}))
+	defer srv.Close()
+
+	telegramAPIBase = srv.URL
+	defer func() { telegramAPIBase = defaultTelegramAPIBase }()
+
+	const token = "1234:super-secret-bot-token"
+	err := VerifyTelegram(context.Background(), config.TelegramConfig{Token: token, ChatID: "42"})
+	if err == nil {
+		t.Fatal("a rejected token verified successfully")
+	}
+	if !strings.Contains(err.Error(), "bot token") || !strings.Contains(err.Error(), "Unauthorized") {
+		t.Errorf("error %q does not name the token or the API's reason", err)
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Errorf("error leaks the bot token: %q", err)
+	}
+}
+
+// TestVerifyTelegramRejectsAnUnreachableChat covers the failure a format check
+// can never see: a valid token whose bot was never spoken to in that chat.
+func TestVerifyTelegramRejectsAnUnreachableChat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/getMe") {
+			_, _ = w.Write([]byte(`{"ok":true}`))
+
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"description":"chat not found"}`))
+	}))
+	defer srv.Close()
+
+	telegramAPIBase = srv.URL
+	defer func() { telegramAPIBase = defaultTelegramAPIBase }()
+
+	err := VerifyTelegram(context.Background(), config.TelegramConfig{Token: "1234:token", ChatID: "-100777"})
+	if err == nil {
+		t.Fatal("an unreachable chat verified successfully")
+	}
+	if !strings.Contains(err.Error(), "-100777") || !strings.Contains(err.Error(), "chat not found") {
+		t.Errorf("error %q does not name the chat or the API's reason", err)
+	}
+}
+
+// TestVerifyTelegramAcceptsWorkingCredentials is the other half of the contract:
+// verification must not stand in the way of credentials that do work.
+func TestVerifyTelegramAcceptsWorkingCredentials(t *testing.T) {
+	var called []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = append(called, r.URL.Path)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	telegramAPIBase = srv.URL
+	defer func() { telegramAPIBase = defaultTelegramAPIBase }()
+
+	if err := VerifyTelegram(context.Background(), config.TelegramConfig{Token: "1234:token", ChatID: "42"}); err != nil {
+		t.Fatalf("VerifyTelegram: %v", err)
+	}
+	if len(called) != 2 || !strings.HasSuffix(called[0], "/getMe") || !strings.HasSuffix(called[1], "/getChat") {
+		t.Errorf("verification did not probe both the token and the chat: %v", called)
+	}
+}
+
+// TestVerifyTelegramSkipsTheChatProbeWhenThereIsNoChat covers a half-filled
+// channel: a token with no chat ID is incomplete, not broken, and probing for a
+// chat whose name is blank would report that the bot "cannot reach chat ".
+func TestVerifyTelegramSkipsTheChatProbeWhenThereIsNoChat(t *testing.T) {
+	var called []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = append(called, r.URL.Path)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	telegramAPIBase = srv.URL
+	defer func() { telegramAPIBase = defaultTelegramAPIBase }()
+
+	if err := VerifyTelegram(context.Background(), config.TelegramConfig{Token: "1234:token"}); err != nil {
+		t.Fatalf("a token with no chat ID failed verification: %v", err)
+	}
+	if len(called) != 1 || !strings.HasSuffix(called[0], "/getMe") {
+		t.Errorf("verification probed for a chat that was never configured: %v", called)
+	}
+}

@@ -98,31 +98,52 @@ at startup, need `systemctl restart rec-deploy`. When in doubt,
 
 ### Setup walkthrough
 
-What the wizard asks, in order:
+The wizard runs as numbered steps — `[1/7] GitHub`, `[2/7] Server` and so on —
+and each one leaves behind only its result. A host without systemd has no update
+timer to enable, so it runs six steps and is numbered accordingly. Answers are
+saved as each step completes, so a wizard abandoned halfway keeps what it already
+collected.
 
-**GitHub token** — a classic personal access token with the `repo` and
+**[1] GitHub** — a classic personal access token with the `repo` and
 `admin:repo_hook` scopes, validated live against the API. Empty keeps the stored
 one. Details below.
 
-**Listen address** — the local bind, `0.0.0.0:9000` by default. This is not what
-GitHub sees; details below.
+**[2] Server** — the listen address (the local bind, `0.0.0.0:9000` by default,
+which is not what GitHub sees) and the public URL registered as the webhook
+destination, which must be reachable from the internet. Details below.
 
-**Public URL** — the address registered as the webhook destination. It must be
-reachable from the internet; details below.
-
-**Scan roots** — comma-separated globs walked to find checkouts of registered
+**[3] Discovery** — comma-separated globs walked to find checkouts of registered
 repositories, e.g. `/home/*/web,/var/www`. Empty keeps the current roots.
 
-**Notifications** — Space toggles `telegram` / `email`, Enter confirms; each
-selected channel is configured on the spot. Confirming with none selected runs
-without notifications.
+**[4] State** — no question: it creates the state database and pins github.com's
+SSH host keys so the first push does not race to build them.
 
-**Test notification** — offered whenever a channel is configured; a wrong chat ID
-or SMTP password is cheaper to find here than on a real deploy.
+**[5] Remote MCP** — optional read-only access for AI clients over an isolated
+Cloudflare Tunnel. Declining leaves it off; `rec-deploy mcp` enables it later.
 
-**Auto-update** — opt-in systemd timer that checks releases hourly and swaps the
-binary after checksum verification, restarting the daemon. Disable any time with
-`systemctl disable --now rec-deploy-update.timer`.
+**[6] Notifications** — Telegram and email are offered one at a time as yes/no
+questions, and answering yes drops straight into that channel's settings.
+Credentials are proved against the real service before they are written: the bot
+token and chat ID against the Telegram Bot API, the SMTP server by opening an
+authenticated session and closing it without sending anything. If the service
+rejects them you are offered **Try again**, **Save anyway** or **Skip**, so a
+wrong chat ID or password cannot be saved without you deciding to. Declining both
+channels runs without notifications.
+
+**[7] Auto-update** — opt-in systemd timer that checks releases hourly and swaps
+the binary after checksum verification, restarting the daemon. Disable any time
+with `systemctl disable --now rec-deploy-update.timer`.
+
+SMTP works on both transports: port `465` is the submissions port and is dialled
+with TLS from the first byte, while every other port starts in the clear and is
+upgraded with STARTTLS when the server advertises it. That is what makes a
+`smtp.resend.com:465` or `smtp.gmail.com:465` configuration send rather than sit
+waiting for a greeting that never comes.
+
+Verification is a property of the interactive setup only. `rec-deploy config set
+notify.telegram.token …` and its siblings stay format-checked and offline, so a
+scripted or CI run never depends on reaching Telegram or a mail server; use
+`rec-deploy notify test` when you want the round trip.
 
 #### Getting a GitHub token
 
@@ -353,6 +374,12 @@ The bare `rec-deploy` hub above is curated, not exhaustive: `deploy`, `repo`, `l
 wizard has run to completion. `rollback` and `scan` are reached from the `repo` and `status` menus,
 and `notify test` from the Telegram/Email sections of `config` — every command above stays
 fully typable and listed in `--help` whether or not the hub shows it on its first screen.
+
+Choosing `deploy` or `logs` on a server with no repository registered is a first run, not
+an error: in a terminal it offers to register one and runs `repo add` if you say yes, and
+declining returns to the menu with nothing reported. Piped, in CI or under systemd the
+same situation still fails with the `rec-deploy repo add <owner/repo>` hint, so scripts
+keep the error they already parse.
 
 A few commands changed shape, not name or flags. `logs` run in a terminal opens a
 browser — pick a repository, then a deploy, then (when that deploy touched more than one

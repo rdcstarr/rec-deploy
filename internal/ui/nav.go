@@ -146,7 +146,15 @@ func (m formModel) View() string {
 		return ""
 	}
 
+	// A submitted huh form renders "" (its own quitting guard). Appending the
+	// footer to that would make the final frame two rows — an empty one and the
+	// footer — and bubbletea's renderer erases only the last row when a program
+	// exits. The empty row survived, which is why every answered prompt used to
+	// leave a blank line behind and the spacing looked arbitrary.
 	view := m.form.View()
+	if view == "" {
+		return ""
+	}
 	if m.footer != "" {
 		view += "\n" + m.footer
 	}

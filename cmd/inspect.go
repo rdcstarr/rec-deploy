@@ -780,7 +780,11 @@ func pickLogsRepo(ctx context.Context, st *store.Store) (string, error) {
 		return "", err
 	}
 	if len(repos) == 0 {
-		return "", fmt.Errorf("no repository is registered — run `rec-deploy repo add <owner/repo>`")
+		// logsBrowser still holds st here. repoAdd opens a second handle and
+		// writes through it, which the store's WAL journal and 5s busy timeout
+		// allow because this one is idle — it is between queries, not inside a
+		// transaction.
+		return "", offerFirstRepo(ctx)
 	}
 
 	items := make([]ui.DescribedOption, 0, len(repos))

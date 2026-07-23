@@ -149,7 +149,9 @@ func enableCloudflareMCP(ctx context.Context) error {
 		TunnelName:  tunnel.Name,
 		DNSRecordID: recordID,
 	}
-	if err := save(); err != nil {
+	// Quiet: this write is a checkpoint mid-provisioning, not the outcome. The
+	// outcome is the readiness report at the end of this function.
+	if err := saveQuiet(); err != nil {
 		cfg.MCP = old
 		return err
 	}
@@ -343,14 +345,18 @@ func disableCloudflareMCP(ctx context.Context) error {
 }
 
 func provisionWithToken(ctx context.Context, tunnelName, listen string) (*cloudflare.Client, cloudflare.Zone, cloudflare.Tunnel, string, string, error) {
-	ui.Info("Cloudflare: Manage Account → Account API Tokens → Create Token")
-	ui.Info("Entire account: Cloudflare One Connector: cloudflared → Edit")
-	ui.Info("Specific domain: DNS → Edit and Zone → Read")
 	accountID, err := promptCloudflareAccountID()
 	if err != nil {
 		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, "", "", err
 	}
-	token, err := ui.SecretPrompt("Cloudflare Account API token", "Stored root-only in config.yaml for cleanup and future tunnel changes. Alt+R reveals or masks it.", Config().MCP.Cloudflare.APIToken)
+	// Where to create the token, and with which permissions, belongs in the
+	// prompt that asks for it: the description is erased with the form, while a
+	// printed line would still be on screen three questions later.
+	token, err := ui.SecretPrompt("Cloudflare Account API token",
+		"Create it at Manage Account → Account API Tokens → Create Token.\n"+
+			"Entire account: Cloudflare One Connector: cloudflared → Edit. Specific domain: DNS → Edit and Zone → Read.\n"+
+			"Stored root-only in config.yaml for cleanup and future tunnel changes. Alt+R reveals or masks it.",
+		Config().MCP.Cloudflare.APIToken)
 	if err != nil {
 		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, "", "", err
 	}

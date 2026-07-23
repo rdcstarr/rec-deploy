@@ -49,25 +49,40 @@ func initialized() bool {
 
 // initWizard collects every setting in order, saving as it goes, and finishes by
 // creating the state the daemon and `repo add` expect to already exist.
+//
+// Each step persists what it collected before the next one runs, so a wizard
+// abandoned halfway keeps the answers already given. The saves are silent: in a
+// wizard the write is a detail, not the action, and announcing every one of them
+// buried the results the operator is actually reading. initSummary names the
+// file once, at the end.
 func initWizard(ctx context.Context) error {
 	cfg := Config()
 
 	ui.Title("rec-deploy init")
 
-	login, err := initToken(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	err = ui.RunWizard(
-		ui.WizardStep{Name: "server", Run: func() error { return initServer(cfg) }},
-		ui.WizardStep{Name: "discovery", Run: func() error { return initDiscovery(cfg) }},
-		ui.WizardStep{Name: "save", Run: save},
+	var login string
+	err := ui.RunWizard(
+		ui.WizardStep{Name: "GitHub", Run: func() error {
+			var err error
+			login, err = initToken(ctx, cfg)
+
+			return err
+		}},
+		ui.WizardStep{Name: "Server", Run: func() error { return initServer(cfg) }},
+		ui.WizardStep{Name: "Discovery", Run: func() error { return initDiscovery(cfg) }},
 		// MCP needs the database before its service can start, and belongs before
 		// optional notifications and updates in the operator-facing flow.
-		ui.WizardStep{Name: "state", Run: func() error { return initState(ctx) }},
-		ui.WizardStep{Name: "mcp", Run: func() error { return initMCP(ctx, cfg) }},
-		ui.WizardStep{Name: "notifications", Run: func() error { return initNotify(ctx) }},
-		ui.WizardStep{Name: "auto-update", Run: func() error { return initAutoUpdate(ctx) }},
+		ui.WizardStep{Name: "State", Run: func() error { return initState(ctx) }},
+		ui.WizardStep{Name: "Remote MCP", Run: func() error { return initMCP(ctx, cfg) }},
+		ui.WizardStep{Name: "Notifications", Run: func() error { return initNotify(ctx) }},
+		ui.WizardStep{
+			Name: "Auto-update",
+			// A host with no systemd has no timer to enable, so the step is not
+			// merely a no-op — it is not part of this wizard at all, and must not
+			// inflate the step count with one the operator never sees.
+			Skip: func() bool { return !systemd.Available() },
+			Run:  func() error { return initAutoUpdate(ctx) },
+		},
 	)
 	if err != nil {
 		return err
@@ -77,7 +92,7 @@ func initWizard(ctx context.Context) error {
 	// wizard abandoned with Esc or stopped by a failing step leaves it false, and
 	// the hub keeps offering setup.
 	cfg.Initialized = true
-	if err := save(); err != nil {
+	if err := saveQuiet(); err != nil {
 		return err
 	}
 
@@ -140,7 +155,7 @@ func initToken(ctx context.Context, cfg *config.Config) (string, error) {
 	ui.Success("authenticated as " + u.Login)
 	cfg.GitHub.Token = token
 
-	return u.Login, nil
+	return u.Login, saveQuiet()
 }
 
 // missingScopesError names exactly which required scopes the token lacks. A
@@ -168,13 +183,12 @@ func initServer(cfg *config.Config) error {
 	}
 	cfg.Listen = listen
 
-	// State the trade-off plainly rather than let it be discovered: the payload
-	// (repository, branch, commit message) travels in clear, and no credential is
-	// in it. The HMAC signature over the raw body is what prevents forgery.
-	ui.Info("GitHub posts the payload over plain http — repository, branch, commit message.")
-	ui.Info("No credential crosses the network: the HMAC signature is what prevents forgery.")
-
-	publicURL, err := ui.Prompt("Public URL GitHub delivers to (e.g. http://1.2.3.4:9000)", "Registered with GitHub as the webhook destination. Must be reachable from the internet — open the port in the firewall. Usually http://<public-ip>:<port>.",
+	// The plain-http trade-off is stated inside the question it qualifies, not
+	// printed above it: a description dies with its form, while a printed line
+	// outlives the step and turns into noise the operator has to scroll past.
+	publicURL, err := ui.Prompt("Public URL GitHub delivers to (e.g. http://1.2.3.4:9000)",
+		"Registered with GitHub as the webhook destination. Must be reachable from the internet — open the port in the firewall. Usually http://<public-ip>:<port>.\n"+
+			"GitHub posts the payload over plain http — repository, branch, commit message. No credential crosses the network: the HMAC signature over the raw body is what prevents forgery.",
 		orDefault(cfg.PublicURL, defaultPublicURL(cfg.Listen)))
 	if err != nil {
 		return err
@@ -184,6 +198,11 @@ func initServer(cfg *config.Config) error {
 		return err
 	}
 	cfg.PublicURL = publicURL
+
+	if err := saveQuiet(); err != nil {
+		return err
+	}
+	ui.Success("listen " + cfg.Listen + " · public " + orNotSet(cfg.PublicURL))
 
 	return nil
 }
@@ -243,6 +262,11 @@ func initDiscovery(cfg *config.Config) error {
 		cfg.Discovery.Roots = list
 	}
 
+	if err := saveQuiet(); err != nil {
+		return err
+	}
+	ui.Success(plural(len(cfg.Discovery.Roots), "scan root"))
+
 	return nil
 }
 
@@ -258,7 +282,7 @@ func initNotify(ctx context.Context) error {
 		return err
 	}
 	if telegram {
-		if err := configureTelegram(); err != nil {
+		if err := configureTelegram(ctx); err != nil {
 			return err
 		}
 	}
@@ -383,9 +407,15 @@ func initState(ctx context.Context) error {
 		return err
 	}
 
-	return ui.Spinner("Pinning github.com host keys…", func() error {
+	if err := ui.Spinner("Pinning github.com host keys…", func() error {
 		return pinHostKeys(ctx)
-	})
+	}); err != nil {
+		return err
+	}
+
+	ui.Success("state database created and github.com host keys pinned")
+
+	return nil
 }
 
 // initSummary reports what the wizard wrote and where, and points at the one

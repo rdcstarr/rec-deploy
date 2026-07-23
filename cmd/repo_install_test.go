@@ -1,10 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/rdcstarr/rec-deploy/internal/ui"
 )
 
 func TestCloneOwnerDirMissingDestinationUsesParent(t *testing.T) {
@@ -160,5 +164,43 @@ func TestClearDirectoryContentsPreservesRootAndDoesNotFollowSymlink(t *testing.T
 	}
 	if _, err := os.Stat(targetFile); err != nil {
 		t.Fatalf("symlink target was modified: %v", err)
+	}
+}
+
+// TestOfferFirstRepoKeepsTheScriptedError pins the guard that makes this helper
+// safe to call from anywhere. Both call sites are behind isInteractive() today,
+// so nothing reaches this branch in production — but the offer opens a prompt,
+// and a prompt in a piped, CI or systemd run hangs on a terminal that is not
+// there. The branch must stay, and it must keep reporting the dead end rather
+// than backing out silently, which would look like success.
+func TestOfferFirstRepoKeepsTheScriptedError(t *testing.T) {
+	if isInteractive() {
+		t.Skip("this test asserts the non-TTY branch; stdin is a terminal here")
+	}
+
+	err := offerFirstRepo(context.Background())
+	if err == nil {
+		t.Fatal("a non-interactive run returned no error for a server with no repository")
+	}
+	if errors.Is(err, ui.ErrBack) {
+		t.Fatal("a non-interactive run backed out silently instead of reporting the dead end")
+	}
+	if !strings.Contains(err.Error(), "rec-deploy repo add") {
+		t.Errorf("error %q does not point at the command that fixes it", err)
+	}
+}
+
+// TestPickRepoOnAFreshServerDoesNotCrash covers the reported symptom: choosing
+// deploy from the hub before any repository exists must not surface a raw
+// error. Non-interactively pickRepo reports "no value, no error" so the command
+// shows its help, which is the same contract it has always had.
+func TestPickRepoOnAFreshServerDoesNotCrash(t *testing.T) {
+	if isInteractive() {
+		t.Skip("this test asserts the non-TTY branch; stdin is a terminal here")
+	}
+
+	slug, ok, err := pickRepo(context.Background(), nil, "Repository to deploy")
+	if err != nil || ok || slug != "" {
+		t.Fatalf("pickRepo(no args, no TTY) = (%q, %v, %v), want the caller to fall back to help", slug, ok, err)
 	}
 }

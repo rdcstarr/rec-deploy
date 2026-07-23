@@ -253,3 +253,40 @@ func TestValidateConfigValue(t *testing.T) {
 		})
 	}
 }
+
+// TestChannelFailureChoiceOffersAllThreeWaysOut pins the contract that keeps a
+// rejected credential from being saved silently: the operator must be able to
+// correct it, override the verdict, or walk away — and the picker's values are
+// what configureTelegram and configureEmail branch on, so a renamed one would
+// silently fall through to "save anyway".
+func TestChannelFailureChoiceOffersAllThreeWaysOut(t *testing.T) {
+	ui.SetColor(false)
+	t.Cleanup(func() { ui.SetColor(true) })
+
+	options := channelFailureOptions("Telegram", "re-enter the bot token and chat ID")
+
+	got := make(map[string]bool, len(options))
+	for _, o := range options {
+		got[o.Value] = true
+	}
+	for _, want := range []string{"retry", "save", "skip"} {
+		if !got[want] {
+			t.Errorf("the failure screen offers no %q way out: %#v", want, options)
+		}
+	}
+}
+
+// TestValidateEmailFieldsRejectsWhatConfigSetRejects pins that the interactive
+// form and the scripted setter agree: a value `config set` refuses must not slip
+// through the wizard just because it was typed into a form instead.
+func TestValidateEmailFieldsRejectsWhatConfigSetRejects(t *testing.T) {
+	if err := validateEmailFields("smtp.example.com:587", "deploy@example.com", "ops@example.com"); err != nil {
+		t.Errorf("a valid trio was rejected: %v", err)
+	}
+	if err := validateEmailFields("smtp.example.com", "deploy@example.com", "ops@example.com"); err == nil {
+		t.Error("an SMTP server with no port was accepted")
+	}
+	if err := validateEmailFields("smtp.example.com:587", "not-an-address", "ops@example.com"); err == nil {
+		t.Error("a malformed sender address was accepted")
+	}
+}

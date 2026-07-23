@@ -24,6 +24,12 @@ const emailTimeout = 30 * time.Second
 // and therefore what smtp.SendMail announced.
 const localName = "localhost"
 
+// submissionsPort is the IANA "submissions" port. A server listening there
+// speaks TLS from the first byte, so dialing it in the clear waits for a
+// greeting that never arrives — which is how a correct Resend, Gmail or
+// Fastmail configuration used to fail with an i/o timeout instead of sending.
+const submissionsPort = "465"
+
 // headerSanitizer strips CR/LF from header values before they are written
 // into the raw message. Defense-in-depth: header values must never contain
 // line breaks, since a break lets the value smuggle an extra header line
@@ -32,8 +38,48 @@ const localName = "localhost"
 // not be, and there is no reason for this class of bug to be possible.
 var headerSanitizer = strings.NewReplacer("\r", " ", "\n", " ")
 
-// sendEmail delivers the summary over SMTP. Authentication is skipped when no
-// username is configured, which is what a local relay wants.
+// VerifyEmail opens an authenticated SMTP session and closes it again without
+// sending anything, so a wrong server, port, username or password is found
+// while the operator is still looking at the form — not on the deploy whose
+// outcome the notification was supposed to carry.
+func VerifyEmail(ctx context.Context, cfg config.EmailConfig) error {
+	c, closeSession, err := dialSMTP(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer closeSession()
+
+	return c.Quit()
+}
+
+// implicitTLS reports whether a server on port speaks TLS from the first byte,
+// so the client must open with a handshake instead of waiting for a greeting
+// and upgrading with STARTTLS afterwards.
+func implicitTLS(port string) bool {
+	return port == submissionsPort
+}
+
+// dialSMTPConn opens the transport under ctx: a TLS handshake straight away
+// when the server speaks TLS from the first byte, a plain connection the caller
+// upgrades with STARTTLS otherwise. It is separate from dialSMTP so the choice
+// can be exercised against a listener on any port — 465 itself is privileged,
+// and a test that can only skip proves nothing.
+func dialSMTPConn(ctx context.Context, address, host string, implicit bool) (net.Conn, error) {
+	if implicit {
+		dialer := tls.Dialer{Config: &tls.Config{ServerName: host}}
+
+		return dialer.DialContext(ctx, "tcp", address)
+	}
+
+	var dialer net.Dialer
+
+	return dialer.DialContext(ctx, "tcp", address)
+}
+
+// dialSMTP opens an authenticated session to cfg's server and returns it with
+// the func that releases it. Port 465 is the submissions port and speaks TLS
+// from the first byte; every other port starts in the clear and is upgraded
+// with STARTTLS when the server advertises it.
 //
 // It drives the exchange by hand rather than calling smtp.SendMail, which
 // neither takes a context nor sets any deadline of its own: a relay that accepts
@@ -42,67 +88,99 @@ var headerSanitizer = strings.NewReplacer("\r", " ", "\n", " ")
 // so that would leak a goroutine and an uncounted inflight per push, and leave
 // Drain waiting on work that can never finish. The steps below are SendMail's,
 // with the connection bounded by a deadline.
-func sendEmail(ctx context.Context, cfg config.EmailConfig, subject, body, htmlBody string) error {
-	host, _, err := net.SplitHostPort(cfg.SMTP)
+func dialSMTP(ctx context.Context, cfg config.EmailConfig) (*smtp.Client, func(), error) {
+	host, port, err := net.SplitHostPort(cfg.SMTP)
 	if err != nil {
-		return fmt.Errorf("bad smtp address %q — use `host:port`: %w", cfg.SMTP, err)
-	}
-
-	msg, err := buildMessage(cfg, subject, body, htmlBody)
-	if err != nil {
-		return fmt.Errorf("assemble mail: %w", err)
+		return nil, nil, fmt.Errorf("bad smtp address %q — use `host:port`: %w", cfg.SMTP, err)
 	}
 
 	// Bounded even when the caller's context carries no deadline; an earlier one
-	// still wins.
+	// still wins. The cancel outlives this function on the success path, so it
+	// travels with the session and is released by the returned func.
 	ctx, cancel := context.WithTimeout(ctx, emailTimeout)
-	defer cancel()
+	opened := false
+	defer func() {
+		if !opened {
+			cancel()
+		}
+	}()
 
-	var dialer net.Dialer
-
-	conn, err := dialer.DialContext(ctx, "tcp", cfg.SMTP)
+	conn, err := dialSMTPConn(ctx, cfg.SMTP, host, implicitTLS(port))
 	if err != nil {
-		return fmt.Errorf("dial smtp %s: %w", cfg.SMTP, err)
+		return nil, nil, fmt.Errorf("dial smtp %s: %w", cfg.SMTP, err)
 	}
-	defer func() { _ = conn.Close() }()
 
 	// DialContext bounds the dial; this bounds every read and write after it.
 	deadline, _ := ctx.Deadline()
 	if err := conn.SetDeadline(deadline); err != nil {
-		return fmt.Errorf("set smtp deadline: %w", err)
+		_ = conn.Close()
+
+		return nil, nil, fmt.Errorf("set smtp deadline: %w", err)
 	}
 
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
-		return fmt.Errorf("smtp greeting from %s: %w", cfg.SMTP, err)
+		_ = conn.Close()
+
+		return nil, nil, fmt.Errorf("smtp greeting from %s: %w", cfg.SMTP, err)
 	}
-	defer func() { _ = c.Close() }()
 
 	// Say hello explicitly, as SendMail does. Extension() would trigger it too,
 	// but it discards the error and answers false, so a relay that rejects EHLO
 	// would surface below as "does not advertise AUTH" and send the operator
 	// after the wrong thing.
 	if err := c.Hello(localName); err != nil {
-		return fmt.Errorf("smtp helo with %s: %w", cfg.SMTP, err)
+		_ = c.Close()
+
+		return nil, nil, fmt.Errorf("smtp helo with %s: %w", cfg.SMTP, err)
 	}
 
-	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
-			return fmt.Errorf("starttls with %s: %w", cfg.SMTP, err)
+	// Only a session that started in the clear can be upgraded; issuing STARTTLS
+	// inside the already-encrypted submissions session is a protocol error.
+	if !implicitTLS(port) {
+		if ok, _ := c.Extension("STARTTLS"); ok {
+			if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+				_ = c.Close()
+
+				return nil, nil, fmt.Errorf("starttls with %s: %w", cfg.SMTP, err)
+			}
 		}
 	}
 
 	if cfg.Username != "" {
 		if ok, _ := c.Extension("AUTH"); !ok {
-			return fmt.Errorf("smtp server %s does not advertise AUTH — clear `notify.email.username` for an unauthenticated relay", cfg.SMTP)
+			_ = c.Close()
+
+			return nil, nil, fmt.Errorf("smtp server %s does not advertise AUTH — clear `notify.email.username` for an unauthenticated relay", cfg.SMTP)
 		}
 		// PlainAuth itself refuses to hand the password to an unencrypted, non-local
 		// server, so a relay that skipped STARTTLS above fails here rather than
 		// leaking the credential.
 		if err := c.Auth(smtp.PlainAuth("", cfg.Username, cfg.Password, host)); err != nil {
-			return fmt.Errorf("smtp auth as %s: %w", cfg.Username, err)
+			_ = c.Close()
+
+			return nil, nil, fmt.Errorf("smtp auth as %s: %w", cfg.Username, err)
 		}
 	}
+
+	opened = true
+
+	return c, func() { _ = c.Close(); cancel() }, nil
+}
+
+// sendEmail delivers the summary over SMTP. Authentication is skipped when no
+// username is configured, which is what a local relay wants.
+func sendEmail(ctx context.Context, cfg config.EmailConfig, subject, body, htmlBody string) error {
+	msg, err := buildMessage(cfg, subject, body, htmlBody)
+	if err != nil {
+		return fmt.Errorf("assemble mail: %w", err)
+	}
+
+	c, closeSession, err := dialSMTP(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer closeSession()
 
 	if err := c.Mail(cfg.From); err != nil {
 		return fmt.Errorf("smtp mail from %s: %w", cfg.From, err)

@@ -207,10 +207,13 @@ func runUninstall(ctx context.Context, keepGitHub, keepData bool) error {
 	return nil
 }
 
-// registeredRepos lists the repositories to clean on GitHub. An absent state
-// database is a half-removed install — nothing to clean — but a store that
-// exists and cannot be read must stop the run: deleting the data would orphan
-// every deploy key and webhook with nothing left here to remove them.
+// registeredRepos lists every registered repository, opening the store, reading
+// it and closing it again — so no caller holds a handle across whatever it does
+// with the result. An absent state database reads as none: for `uninstall` that
+// is a half-removed install with nothing left to clean, and for `pickRepo` it is
+// a server where `init` has not run yet. A store that exists and cannot be read
+// is still an error, because uninstall deleting the data would orphan every
+// deploy key and webhook with nothing left here to remove them.
 func registeredRepos(ctx context.Context) ([]store.Repo, error) {
 	db, err := config.StateDB()
 	if err != nil {

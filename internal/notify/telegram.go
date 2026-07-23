@@ -30,6 +30,56 @@ var telegramClient = &http.Client{Timeout: 15 * time.Second}
 // only failure sendTelegram treats as retryable with the plain body.
 var errTelegramBadRequest = errors.New("telegram rejected the request")
 
+// VerifyTelegram reports whether the bot token is valid and whether the bot can
+// reach the configured chat, without sending a message. It is the notification
+// counterpart of validating the GitHub token against GET /user: credentials
+// that merely look well-formed are worth nothing on the deploy that needed them,
+// and a chat ID is only ever wrong in ways no format check can see.
+func VerifyTelegram(ctx context.Context, cfg config.TelegramConfig) error {
+	if err := callTelegram(ctx, cfg.Token, "getMe", nil); err != nil {
+		return fmt.Errorf("the bot token was rejected — %w; create one with @BotFather", err)
+	}
+
+	// With no chat there is nothing to probe, and asking anyway would report
+	// that the bot "cannot reach chat" with the name left blank. A half-filled
+	// channel is Configured()'s business, and the caller warns about it.
+	if cfg.ChatID == "" {
+		return nil
+	}
+
+	if err := callTelegram(ctx, cfg.Token, "getChat", url.Values{"chat_id": {cfg.ChatID}}); err != nil {
+		return fmt.Errorf("the bot cannot reach chat %s — %w; send the bot one message from that chat first, or check the id with @userinfobot", cfg.ChatID, err)
+	}
+
+	return nil
+}
+
+// callTelegram posts one Bot API method and reports the outcome as the API's own
+// description. Like postTelegram it must never name the token: the token is in
+// the URL path, so both an http.Client failure and the echoed response body can
+// carry it.
+func callTelegram(ctx context.Context, token, method string, form url.Values) error {
+	endpoint := fmt.Sprintf("%s/bot%s/%s", telegramAPIBase, token, method)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return redactURLError(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := telegramClient.Do(req)
+	if err != nil {
+		return redactURLError(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return errors.New(telegramError(resp))
+	}
+
+	return nil
+}
+
 // sendTelegram posts the HTML card and falls back to the plain body when the
 // Bot API rejects the entities (400) — a notification must never be lost to a
 // template.

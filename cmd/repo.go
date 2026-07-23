@@ -901,18 +901,14 @@ func pickRepo(ctx context.Context, args []string, title string) (slug string, ok
 		return "", false, nil
 	}
 
-	st, err := openStore(ctx)
-	if err != nil {
-		return "", false, err
-	}
-	defer func() { _ = st.Close() }()
-
-	repos, err := st.Repos(ctx)
+	// registeredRepos opens the store, reads and closes it, so no handle is held
+	// while offerFirstRepo runs a registration that opens one of its own.
+	repos, err := registeredRepos(ctx)
 	if err != nil {
 		return "", false, err
 	}
 	if len(repos) == 0 {
-		return "", false, fmt.Errorf("no repository is registered — run `rec-deploy repo add <owner/repo>`")
+		return "", false, offerFirstRepo(ctx)
 	}
 
 	options := make([]ui.Option, 0, len(repos))
@@ -929,6 +925,49 @@ func pickRepo(ctx context.Context, args []string, title string) (slug string, ok
 	}
 
 	return choice, true, nil
+}
+
+// offerFirstRepo turns the no-repository dead end into a question. Reaching
+// `deploy` or `logs` on a fresh server is an ordinary first run, not a failure,
+// and reporting it as one left a red error line above a redrawn menu — the hub
+// renders what a command returns, so the operator saw a crash where they should
+// have seen the next step.
+//
+// In a terminal it offers the registration and runs it; anywhere else it returns
+// the flag-driven hint unchanged, so piped and CI runs keep the error they
+// already parse. Either way it ends in ui.ErrBack, which every menu loop reads
+// as "re-show me" and renders as nothing.
+//
+// It deliberately does not chain into the caller's own command: a freshly
+// registered repository has no checkout on this server yet, so deploying it
+// would only move the dead end one screen along. repoAdd's own output points at
+// `repo install`, which is the real next step.
+func offerFirstRepo(ctx context.Context) error {
+	if !isInteractive() {
+		return fmt.Errorf("no repository is registered — run `rec-deploy repo add <owner/repo>`")
+	}
+
+	add, err := ui.Confirm("Register a repository now?",
+		"No repository is registered on this server yet. Registering one uploads a read-only deploy key and this server's webhook to GitHub, which is what a deploy needs before it can run. `rec-deploy repo add <owner/repo>` does the same from a script.")
+	if err != nil {
+		return err // ui.ErrBack or ui.ErrQuit — both unwind cleanly
+	}
+	if !add {
+		return ui.ErrBack
+	}
+
+	slug, ok, err := interactiveArg(nil, "Repository (owner/repo)")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ui.ErrBack
+	}
+	if err := repoAdd(ctx, slug); err != nil {
+		return err
+	}
+
+	return ui.ErrBack
 }
 
 // registeredRepo looks slug up, turning "not found" into the actionable error —

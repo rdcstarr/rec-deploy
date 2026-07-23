@@ -33,8 +33,19 @@ func ScreenPath(parts ...string) string {
 	return strings.Join(parts, " / ")
 }
 
-// keyWidth is the padded width of the key column in KeyValue / KeyList.
-const keyWidth = 11
+// Step prints a wizard step heading: one blank line, then "[n/total] Name". It
+// is deliberately the only place a wizard emits a blank line, so every step is
+// separated by the same amount of space.
+func Step(n, total int, name string) {
+	Out("")
+	Out(render(StyleTitle, fmt.Sprintf("[%d/%d] %s", n, total, name)))
+}
+
+// keyWidth is the padded width of the key column in KeyValue / KeyList. It has
+// to fit the longest key in the tree — "auto-update:" is 12 — or that row's
+// value lands a column right of every other one. A longer key added later
+// needs this widened with it.
+const keyWidth = 12
 
 // KeyValueLine returns the aligned "key: value" line KeyValue prints, for
 // composing a block rather than writing it a line at a time.

@@ -52,6 +52,65 @@ func TestFormFooterShowsBackAndQuit(t *testing.T) {
 	}
 }
 
+// TestCompletedFormRendersNothing is the whole reason interactive output used to
+// be littered with blank lines. huh renders "" once a form is submitted, so
+// appending the footer to it left a two-row final frame — and bubbletea's
+// renderer erases only the last row on exit, leaving the empty first row on
+// screen after every prompt.
+func TestCompletedFormRendersNothing(t *testing.T) {
+	var v string
+	f := huh.NewForm(huh.NewGroup(huh.NewInput().Value(&v))).WithKeyMap(formKeyMap())
+	f.Init()
+
+	model := formModel{form: f, footer: formFooter(false, false)}
+	if model.View() == "" {
+		t.Fatal("a live form rendered nothing; the test cannot tell completion apart")
+	}
+
+	// Enter submits the single-field form, which is what sets huh's own quitting
+	// guard and makes Form.View() empty.
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = pump(t, next.(formModel), cmd)
+
+	if f.State == huh.StateNormal {
+		t.Fatalf("form did not complete on enter, state = %v", f.State)
+	}
+	if view := model.View(); view != "" {
+		t.Errorf("completed form rendered %q, want an empty frame so nothing is left behind", view)
+	}
+}
+
+// pump runs the commands a form returns and feeds each resulting message back
+// in, until it stops producing any. huh completes a form over a message round
+// trip rather than inside the key handler, so a test without a running
+// bubbletea program has to drive that round trip itself.
+func pump(t *testing.T, m formModel, cmd tea.Cmd) formModel {
+	t.Helper()
+
+	for i := 0; cmd != nil && i < 20; i++ {
+		msgs := []tea.Msg{cmd()}
+		if batch, ok := msgs[0].(tea.BatchMsg); ok {
+			msgs = msgs[:0]
+			for _, c := range batch {
+				if c != nil {
+					msgs = append(msgs, c())
+				}
+			}
+		}
+
+		cmd = nil
+		for _, msg := range msgs {
+			next, next2 := m.Update(msg)
+			m = next.(formModel)
+			if next2 != nil {
+				cmd = next2
+			}
+		}
+	}
+
+	return m
+}
+
 // TestSecretFieldIsMasked pins the in-form password mask: the typed value must
 // never appear in the rendered view.
 func TestSecretFieldIsMasked(t *testing.T) {

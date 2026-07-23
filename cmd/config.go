@@ -354,30 +354,97 @@ func validateGitHubToken(ctx context.Context, token string) error {
 	return nil
 }
 
-// configureTelegram collects the Telegram bot token and chat ID. An existing
-// token opens pre-filled and masked, with Alt+R available inside its editor.
-func configureTelegram() error {
+// channelFailureChoice asks what to do with notification credentials the service
+// itself rejected. It is where the channels part company with the GitHub token,
+// which simply aborts: a notification channel is optional, so refusing to
+// continue would cost the operator the rest of the wizard over an extra, while
+// saving silently is how a wrong chat ID or password used to survive until the
+// deploy whose result it was meant to carry.
+//
+// The failure line is printed rather than folded into the screen: unlike the
+// guidance attached to a prompt, it is a result, and it is worth still being on
+// screen after the wizard ends. Backing out counts as skipping the channel.
+func channelFailureChoice(channel, retryHint string, cause error) (string, error) {
+	ui.Warn(strings.ToLower(channel) + ": " + cause.Error())
+	ui.Out("")
+
+	return ui.Select(channel+" verification failed", channelFailureOptions(channel, retryHint))
+}
+
+// channelFailureOptions lists the three ways out of a rejected credential. It is
+// its own function so a test can hold the real list rather than a copy of it:
+// the callers branch on these exact values, and a renamed one would fall
+// through to "save anyway" — saving the very credentials the service refused.
+func channelFailureOptions(channel, retryHint string) []ui.Option {
+	return ui.DescribedOptions(
+		ui.DescribedOption{Name: "Try again", Description: retryHint, Value: "retry"},
+		ui.DescribedOption{Name: "Save anyway", Description: "keep the values; the channel may stay silent", Value: "save"},
+		ui.DescribedOption{Name: "Skip " + channel, Description: "leave this channel unconfigured", Value: "skip"},
+	)
+}
+
+// configureTelegram collects the Telegram bot token and chat ID, then proves
+// both against the Bot API before writing either. An existing token opens
+// pre-filled and masked, with Alt+R available inside its editor; a retry reopens
+// on the previous attempt so nothing has to be retyped.
+func configureTelegram(ctx context.Context) error {
 	cfg := Config()
+	token, chatID := cfg.Notify.Telegram.Token, cfg.Notify.Telegram.ChatID
 
-	token, err := ui.SecretPrompt("Telegram bot token (from @BotFather)", "From @BotFather (/newbot). Alt+R reveals or masks the stored value.", cfg.Notify.Telegram.Token)
-	if err != nil {
-		return err
-	}
-	token = strings.TrimSpace(token)
+	for {
+		var err error
+		if token, err = ui.SecretPrompt("Telegram bot token (from @BotFather)", "From @BotFather (/newbot). Alt+R reveals or masks the stored value.", token); err != nil {
+			return err
+		}
+		token = strings.TrimSpace(token)
 
-	chatID, err := ui.Prompt("Telegram chat / user ID", "Numeric user or group ID (group IDs are negative), or @channelusername for channels. @userinfobot tells you yours.", cfg.Notify.Telegram.ChatID)
-	if err != nil {
-		return err
+		if chatID, err = ui.Prompt("Telegram chat / user ID", "Numeric user or group ID (group IDs are negative), or @channelusername for channels. @userinfobot tells you yours.", chatID); err != nil {
+			return err
+		}
+		chatID = strings.TrimSpace(chatID)
+
+		// Two blank answers are a change of mind, not a broken credential; there
+		// is nothing to prove against the API and nothing to complain about.
+		if token == "" && chatID == "" {
+			ui.Info("telegram left unconfigured — add it later with `rec-deploy config`")
+
+			return nil
+		}
+
+		// The format check first, so an obviously wrong chat ID costs no round
+		// trip and reads the same as it does in `config set`.
+		verifyErr := validateConfigValue("notify.telegram.chat_id", chatID)
+		if verifyErr == nil {
+			verifyErr = ui.Spinner("Verifying the Telegram bot…", func() error {
+				return notify.VerifyTelegram(ctx, config.TelegramConfig{Token: token, ChatID: chatID})
+			})
+		}
+		if verifyErr == nil {
+			ui.Success("telegram verified — the bot can post to that chat")
+
+			break
+		}
+
+		choice, err := channelFailureChoice("Telegram", "re-enter the bot token and chat ID", verifyErr)
+		if err != nil {
+			return err // ui.ErrQuit, or ui.ErrBack from the picker
+		}
+		if choice == "retry" {
+			continue
+		}
+		if choice == "skip" || choice == "" {
+			// Nothing is written, so a skip leaves whatever was already
+			// configured exactly as it was.
+			return nil
+		}
+
+		break
 	}
 
-	chatID = strings.TrimSpace(chatID)
-	if err := validateConfigValue("notify.telegram.chat_id", chatID); err != nil {
-		return err
-	}
 	cfg.Notify.Telegram.Token = token
 	cfg.Notify.Telegram.ChatID = chatID
 
-	if err := save(); err != nil {
+	if err := saveQuiet(); err != nil {
 		return err
 	}
 	if telegramPartial(cfg.Notify.Telegram) {
@@ -387,53 +454,104 @@ func configureTelegram() error {
 	return nil
 }
 
-// configureEmail collects the SMTP notification settings in a single form. The
-// password field is pre-filled and masked; Alt+R reveals it in place.
+// configureEmail collects the SMTP notification settings in a single form, then
+// opens a real session to the server — without sending anything — before it
+// writes any of them. The password field is pre-filled and masked; Alt+R reveals
+// it in place, and a retry reopens the form on the previous attempt.
 func configureEmail(ctx context.Context) error {
 	cfg := Config()
 	smtp, from := cfg.Notify.Email.SMTP, cfg.Notify.Email.From
 	to, username := cfg.Notify.Email.To, cfg.Notify.Email.Username
 	password := cfg.Notify.Email.Password
 
+	smtpDesc := "host:port, e.g. smtp.example.com:587. Port 465 speaks TLS from the first byte; any other port starts in the clear and upgrades with STARTTLS."
 	// With no server set yet, offer a local relay if one is listening: it needs
-	// no credentials (username stays empty → sendEmail skips auth).
+	// no credentials (username stays empty → sendEmail skips auth). The offer
+	// belongs in the field's own description, which is erased with the form —
+	// printed above it, it outlived the question and became noise.
 	if smtp == "" {
 		if local := notify.DetectLocalSMTP(ctx); local != "" {
 			smtp = local
-			ui.Info("detected a local mail server on " + local + " — leave username empty to send without authentication")
+			smtpDesc = "detected a local mail server on " + local + " — leave the username empty to send without authentication.\n" + smtpDesc
 		}
 	}
 
-	if err := ui.Form([]ui.Field{
-		{Title: "SMTP server (host:port)", Desc: "host:port, e.g. smtp.example.com:587.", Value: &smtp},
-		{Title: "From address", Desc: "Envelope sender of the notification mails.", Value: &from},
-		{Title: "To address", Desc: "Recipient of deploy results.", Value: &to},
-		{Title: "SMTP username (empty disables authentication)", Desc: "Empty disables authentication — fine for a localhost relay.", Value: &username},
-		{Title: "SMTP password", Desc: "Alt+R reveals or masks the stored value.", Secret: true, Value: &password},
-	}); err != nil {
-		return err
-	}
-	for _, field := range []struct{ key, value string }{
-		{"notify.email.smtp", strings.TrimSpace(smtp)},
-		{"notify.email.from", strings.TrimSpace(from)},
-		{"notify.email.to", strings.TrimSpace(to)},
-	} {
-		if err := validateConfigValue(field.key, field.value); err != nil {
+	for {
+		if err := ui.Form([]ui.Field{
+			{Title: "SMTP server (host:port)", Desc: smtpDesc, Value: &smtp},
+			{Title: "From address", Desc: "Envelope sender of the notification mails.", Value: &from},
+			{Title: "To address", Desc: "Recipient of deploy results.", Value: &to},
+			{Title: "SMTP username (empty disables authentication)", Desc: "Empty disables authentication — fine for a localhost relay.", Value: &username},
+			{Title: "SMTP password", Desc: "Alt+R reveals or masks the stored value.", Secret: true, Value: &password},
+		}); err != nil {
 			return err
 		}
+		smtp, from, to = strings.TrimSpace(smtp), strings.TrimSpace(from), strings.TrimSpace(to)
+		username, password = strings.TrimSpace(username), strings.TrimSpace(password)
+
+		// An empty form is a change of mind, not a broken credential.
+		if smtp == "" && from == "" && to == "" {
+			ui.Info("email left unconfigured — add it later with `rec-deploy config`")
+
+			return nil
+		}
+
+		verifyErr := validateEmailFields(smtp, from, to)
+		if verifyErr == nil && smtp != "" {
+			verifyErr = ui.Spinner("Verifying the SMTP server…", func() error {
+				return notify.VerifyEmail(ctx, config.EmailConfig{SMTP: smtp, From: from, To: to, Username: username, Password: password})
+			})
+		}
+		if verifyErr == nil {
+			ui.Success("email verified — " + smtp + " accepted the connection")
+
+			break
+		}
+
+		choice, err := channelFailureChoice("Email", "re-enter the server, addresses and credentials", verifyErr)
+		if err != nil {
+			return err // ui.ErrQuit, or ui.ErrBack from the picker
+		}
+		if choice == "retry" {
+			continue
+		}
+		if choice == "skip" || choice == "" {
+			// Nothing is written, so a skip leaves whatever was already
+			// configured exactly as it was.
+			return nil
+		}
+
+		break
 	}
 
-	cfg.Notify.Email.SMTP = strings.TrimSpace(smtp)
-	cfg.Notify.Email.From = strings.TrimSpace(from)
-	cfg.Notify.Email.To = strings.TrimSpace(to)
-	cfg.Notify.Email.Username = strings.TrimSpace(username)
-	cfg.Notify.Email.Password = strings.TrimSpace(password)
+	cfg.Notify.Email.SMTP = smtp
+	cfg.Notify.Email.From = from
+	cfg.Notify.Email.To = to
+	cfg.Notify.Email.Username = username
+	cfg.Notify.Email.Password = password
 
-	if err := save(); err != nil {
+	if err := saveQuiet(); err != nil {
 		return err
 	}
 	if emailPartial(cfg.Notify.Email) {
 		ui.Warn("email stays disabled until smtp, from and to are all set")
+	}
+
+	return nil
+}
+
+// validateEmailFields runs the format checks `config set` applies to the three
+// addressable email settings, so the form rejects the same values the scripted
+// setter does before anything reaches the network.
+func validateEmailFields(smtp, from, to string) error {
+	for _, field := range []struct{ key, value string }{
+		{"notify.email.smtp", smtp},
+		{"notify.email.from", from},
+		{"notify.email.to", to},
+	} {
+		if err := validateConfigValue(field.key, field.value); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -452,9 +570,19 @@ func emailPartial(e config.EmailConfig) bool {
 	return !e.Configured() && (e.SMTP != "" || e.From != "" || e.To != "")
 }
 
-// save persists the in-memory config and reports where it landed.
+// saveQuiet persists the in-memory config without announcing it. A step that
+// saves as part of a longer flow uses this: in the setup wizard the write is a
+// detail, and one "saved" line per step buried the results the operator was
+// there to read.
+func saveQuiet() error {
+	return config.Save(flagConfig, Config())
+}
+
+// save persists the in-memory config and reports where it landed. `config` uses
+// it because there the save is the action the operator asked for, and silence
+// would leave them wondering whether it took.
 func save() error {
-	if err := config.Save(flagConfig, Config()); err != nil {
+	if err := saveQuiet(); err != nil {
 		return err
 	}
 

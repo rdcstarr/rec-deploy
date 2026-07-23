@@ -158,8 +158,10 @@ func TestPathLogBodyRendersEveryCommand(t *testing.T) {
 // before this pane existed, ui.KeyValue's "key: value" form — colon, fixed
 // width key column, plain value — not ui.TwoCol's two-space indent, dropped
 // colon and dynamically sized column. A check on the value alone would pass
-// against both, since both carry the same field names; the literal string
-// below is what tells them apart.
+// against both, since both carry the same field names; the exact line below is
+// what tells them apart. It is built with ui.KeyValueLine rather than written
+// out, so widening the key column moves this expectation with it instead of
+// breaking a literal that only ever encoded the column's old width.
 func TestPathLogBodyHeaderMatchesNonInteractiveFormat(t *testing.T) {
 	ui.SetColor(false)
 
@@ -169,7 +171,7 @@ func TestPathLogBodyHeaderMatchesNonInteractiveFormat(t *testing.T) {
 		"rdcstarr/rec-tools",
 	)
 
-	const want = "repository: rdcstarr/rec-tools"
+	want := ui.KeyValueLine("repository", "rdcstarr/rec-tools")
 	if !strings.Contains(body, want) {
 		t.Errorf("header line does not match ui.KeyValue's %q form:\n%s", want, body)
 	}
