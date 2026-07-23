@@ -120,6 +120,9 @@ SSH host keys so the first push does not race to build them.
 
 **[5] Remote MCP** — optional read-only access for AI clients over an isolated
 Cloudflare Tunnel. Declining leaves it off; `rec-deploy mcp` enables it later.
+The step confirms in one line rather than opening the readiness screen — that
+belongs to `rec-deploy mcp enable`, which was asked for MCP specifically. The
+bearer token is not lost with it: `rec-deploy mcp token` shows it any time.
 
 **[6] Notifications** — Telegram and email are offered one at a time as yes/no
 questions, and answering yes drops straight into that channel's settings.
@@ -128,7 +131,10 @@ token and chat ID against the Telegram Bot API, the SMTP server by opening an
 authenticated session and closing it without sending anything. If the service
 rejects them you are offered **Try again**, **Save anyway** or **Skip**, so a
 wrong chat ID or password cannot be saved without you deciding to. Declining both
-channels runs without notifications.
+channels runs without notifications. There is no separate "send a test
+notification?" question any more — it existed because nothing else proved the
+credentials, and each channel now proves its own. `rec-deploy notify test`
+delivers a real message whenever you want one.
 
 **[7] Auto-update** — opt-in systemd timer that checks releases hourly and swaps
 the binary after checksum verification, restarting the daemon. Disable any time

@@ -10,7 +10,6 @@ import (
 
 	"github.com/rdcstarr/rec-deploy/internal/config"
 	"github.com/rdcstarr/rec-deploy/internal/github"
-	"github.com/rdcstarr/rec-deploy/internal/notify"
 	"github.com/rdcstarr/rec-deploy/internal/systemd"
 	"github.com/rdcstarr/rec-deploy/internal/ui"
 )
@@ -121,7 +120,7 @@ func initMCP(ctx context.Context, cfg *config.Config) error {
 		return nil
 	}
 
-	return enableCloudflareMCP(ctx)
+	return enableCloudflareMCP(ctx, false)
 }
 
 // initToken reads the GitHub token, validates it against GET /user, and refuses
@@ -300,51 +299,18 @@ func initNotify(ctx context.Context) error {
 	// Declining both channels used to leave the step silent — say what happened so
 	// an operator who ends up with no notifications knows where to add them later.
 	// A partially filled channel is not this case: its own configurator already
-	// warned it stays disabled, and offerTestNotification speaks for a full one.
+	// warned it stays disabled.
 	cfg := Config()
 	if !telegram && !email && !cfg.Notify.Telegram.Configured() && !cfg.Notify.Email.Configured() {
 		ui.Info("no notification channels selected — configure later with:  rec-deploy config")
 	}
 
-	return offerTestNotification(ctx)
-}
-
-// offerTestNotification sends one summary through the configured channels on
-// request. A wrong chat ID or SMTP password is worth finding here, not on the
-// deploy whose outcome the notification was supposed to carry.
-func offerTestNotification(ctx context.Context) error {
-	cfg := Config()
-	if !cfg.Notify.Telegram.Configured() && !cfg.Notify.Email.Configured() {
-		return nil
-	}
-
-	send, err := ui.Confirm("Send a test notification now?", "Sends a summary through every configured channel — a wrong chat ID or SMTP password is cheaper to find now than on a real deploy.")
-	if err != nil {
-		return err
-	}
-	if !send {
-		return nil
-	}
-
-	var results []notify.ChannelResult
-	if err := ui.Spinner("Sending the test notification…", func() error {
-		results = notify.Deliver(ctx, cfg.Notify, notify.Summary{
-			Repository: "rec-deploy",
-			Ref:        "refs/heads/main",
-			Status:     "test",
-			Message:    "Notifications are configured correctly.",
-		})
-
-		return nil
-	}); err != nil {
-		return err
-	}
-
-	// A failed channel is named above by printChannelResults; it does not abort
-	// the wizard — the rest of init (state, host keys) does not depend on it,
-	// and the operator can fix the channel afterwards with `rec-deploy config`.
-	printChannelResults(results)
-
+	// There is deliberately no "send a test notification?" question here any
+	// more. It existed because nothing else proved the credentials, and each
+	// channel now proves its own before it is saved — so the question was a
+	// second interaction and two more result lines for an answer the step had
+	// already given. `rec-deploy notify test`, and the config menu's "Send a
+	// test", still deliver a real message on demand.
 	return nil
 }
 

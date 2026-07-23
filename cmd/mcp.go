@@ -219,7 +219,7 @@ func newMCPEnableCmd() *cobra.Command {
 			if !isInteractive() {
 				return fmt.Errorf("cloudflare MCP setup is interactive — run `sudo rec-deploy mcp enable` in a terminal")
 			}
-			return enableCloudflareMCP(cmd.Context())
+			return enableCloudflareMCP(cmd.Context(), true)
 		},
 	}
 }

@@ -34,7 +34,12 @@ const (
 var hostnamePart = regexp.MustCompile(`[^a-z0-9-]+`)
 var cloudflareAccountID = regexp.MustCompile(`^[a-fA-F0-9]{32}$`)
 
-func enableCloudflareMCP(ctx context.Context) error {
+// enableCloudflareMCP provisions the tunnel, the DNS record and the local
+// services, rolling every one of them back if a later step fails. report asks
+// for the full readiness screen at the end: `mcp enable` wants it, the setup
+// wizard does not — there the step is one question among seven, and its answer
+// is one line.
+func enableCloudflareMCP(ctx context.Context, report bool) error {
 	if Config().MCP.Enabled && Config().MCP.Mode == "cloudflare" {
 		return fmt.Errorf("cloudflare MCP is already enabled at %s — disable it before provisioning a replacement", Config().MCP.PublicURL)
 	}
@@ -208,6 +213,18 @@ func enableCloudflareMCP(ctx context.Context) error {
 
 	rollback = false
 	_ = os.Remove(filepath.Join(dir, "provision-cert.pem"))
+
+	// `mcp enable` was asked for MCP, so its readiness report — bearer token
+	// included — is the answer. A wizard step was not: it asked whether to turn
+	// the feature on, and answering that with a full screen the operator has to
+	// dismiss before the setup continues is an interruption, not a result. The
+	// token is not lost with the report; `rec-deploy mcp token` shows it.
+	if !report {
+		ui.Success("remote MCP online at " + cfg.MCP.PublicURL + " — bearer token with `rec-deploy mcp token`")
+
+		return nil
+	}
+
 	displayToken := clearToken
 	if displayToken == "" {
 		displayToken, _ = readMCPToken(cfg.MCP.TokenHash)
