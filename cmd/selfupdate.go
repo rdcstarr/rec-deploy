@@ -98,9 +98,16 @@ func selfUpdateInteractive(ctx context.Context, current string) error {
 	return runUpdatePath(wantRestart,
 		func() error { return selfUpdateInstall(ctx, current) },
 		func() error {
-			return ui.Spinner("Updating rec-deploy and restarting "+daemonUnit+"…", func() error {
-				return selfUpdateRestart(ctx, current)
-			})
+			// selfUpdateRestart shells out to sudo when rec-deploy lives in a
+			// root-owned path — the expected case — and sudo needs the real
+			// terminal to prompt for a password. A spinner here would erase and
+			// redraw over that prompt every 90ms, reading as a hang rather than a
+			// request for input, so this stays outside ui.Spinner for the same
+			// reason selfUpdateInstall keeps Install outside its own.
+			ui.Info("updating rec-deploy and restarting " + daemonUnit +
+				" — downloads the release, swaps the binary, then watches it for up to 30s before accepting or rolling back the update; it may prompt for your sudo password")
+
+			return selfUpdateRestart(ctx, current)
 		},
 	)
 }
@@ -137,14 +144,20 @@ func confirmRestart(ctx context.Context, current, latest string) (bool, error) {
 		return false, nil
 	}
 	if !systemd.IsActive(ctx, daemonUnit) {
-		ui.Info(daemonUnit + " is not running and was left stopped — start it to run the new version")
+		// Wording matches the "installed but daemon was left stopped" case
+		// selfUpdateRestart reports after the fact — "start it when ready" —
+		// since that is the same outcome this decision leads to: install goes
+		// ahead below, and the unit stays down until the operator starts it.
+		ui.Info(daemonUnit + " is not running and was left stopped — start it when ready")
 
 		return false, nil
 	}
 
 	detail := "The daemon is still running " + current + ". It is stopped and started on " + latest + ", and rolled back automatically if it does not stay up."
 	if running, err := runningDeployCount(ctx); err != nil {
-		slog.Warn("cannot count running deploys for the restart prompt", "error", err)
+		// "cannot X; proceeding without Y" matches the pattern selfUpdateRestart
+		// uses for its own best-effort store reads a few lines below.
+		slog.Warn("cannot count running deploys for the restart prompt; proceeding without the count", "error", err)
 	} else if running > 0 {
 		detail = plural(running, "deploy") + " running right now would be cut short. " + detail
 	}
