@@ -499,18 +499,23 @@ func serviceAction(ctx context.Context, action string) error {
 		}
 	}
 
-	var err error
+	var run func() error
+	var title string
 	switch action {
 	case "start":
-		err = systemd.Start(ctx, daemonUnit)
+		run, title = func() error { return systemd.Start(ctx, daemonUnit) }, "Starting "+daemonUnit+"…"
 	case "stop":
-		err = systemd.Stop(ctx, daemonUnit)
+		run, title = func() error { return systemd.Stop(ctx, daemonUnit) }, "Stopping "+daemonUnit+"…"
 	case "restart":
-		err = systemd.Restart(ctx, daemonUnit)
+		run, title = func() error { return systemd.Restart(ctx, daemonUnit) }, "Restarting "+daemonUnit+"…"
 	default:
 		return fmt.Errorf("unknown status action %q", action)
 	}
-	if err != nil {
+
+	// Stopping and restarting drain in-flight deploy work before the unit
+	// comes back down or up, so this is plausibly multi-second — a dead pause
+	// between "Yes" and the result without the spinner.
+	if err := ui.Spinner(title, run); err != nil {
 		return err
 	}
 
