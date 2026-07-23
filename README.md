@@ -348,6 +348,24 @@ and it opens a menu or prompts; piped or under systemd it falls back to help, a 
 summary, or an error naming the flag. Destructive actions confirm in a TTY and require
 `--yes` otherwise.
 
+The bare `rec-deploy` hub above is curated, not exhaustive: `deploy`, `repo`, `logs`,
+`status`, `config`, `mcp`, `self-update` and `uninstall`, plus `init` until the server has
+a token configured. `rollback` and `scan` are reached from the `repo` and `status` menus,
+and `notify test` from the Telegram/Email sections of `config` — every command above stays
+fully typable and listed in `--help` whether or not the hub shows it on its first screen.
+
+A few commands changed shape, not name or flags. `logs` run in a terminal opens a
+browser — pick a repository, then a deploy, then (when that deploy touched more than one
+checkout) which checkout, then read what each command printed in a scrollable pane;
+`--path`, `--limit`, `--json` and every non-TTY run are unchanged. `self-update` is one
+checked, verified, fail-closed action, not a menu: it reports current → latest, confirms,
+installs, and offers a supervised restart; `--check` and `--restart` are unchanged.
+`status` now offers to run `scan` and to start, stop or restart the daemon underneath the
+health report it already prints. `serve` is the process those actions — and systemd —
+start; it refuses to run a second time beside a `rec-deploy.service` that is already
+active, so start, stop and restart it from `rec-deploy status` or `systemctl`, never by
+running `serve` by hand.
+
 Global flags: `--config`, `--json`, `--no-color`, `-v/--verbose`, `--yes`.
 
 ## Paths
@@ -404,6 +422,10 @@ For an agent on another machine, enable the isolated Cloudflare Tunnel wizard:
 sudo rec-deploy mcp enable
 rec-deploy mcp status
 ```
+
+`mcp status` reports access mode, endpoint and service health in at most four lines; run
+in a terminal it is also where you act on them — rotate the token, restart the service, or
+re-check — rather than a readout you go elsewhere to fix.
 
 Choose a one-time Cloudflare Account API token (recommended) or browser login.
 Create the token under **Manage Account → Account API Tokens** with two policies:
