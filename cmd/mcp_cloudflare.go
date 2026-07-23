@@ -81,7 +81,6 @@ func enableCloudflareMCP(ctx context.Context, report bool) error {
 	if err != nil {
 		return err
 	}
-	tunnelName := defaultTunnelName()
 	var tunnel cloudflare.Tunnel
 	var zone cloudflare.Zone
 	var hostname string
@@ -114,9 +113,9 @@ func enableCloudflareMCP(ctx context.Context, report bool) error {
 	}()
 
 	if method == "token" {
-		provision, zone, tunnel, claim, hostname, err = provisionWithToken(ctx, tunnelName, listen)
+		provision, zone, tunnel, claim, hostname, err = provisionWithToken(ctx, listen)
 	} else {
-		zone, tunnel, hostname, err = provisionWithBrowser(ctx, bin, tunnelName, listen)
+		zone, tunnel, hostname, err = provisionWithBrowser(ctx, bin, listen)
 	}
 	if err != nil {
 		return err
@@ -363,7 +362,7 @@ func disableCloudflareMCP(ctx context.Context) error {
 	return nil
 }
 
-func provisionWithToken(ctx context.Context, tunnelName, listen string) (*cloudflare.Client, cloudflare.Zone, cloudflare.Tunnel, dnsClaim, string, error) {
+func provisionWithToken(ctx context.Context, listen string) (*cloudflare.Client, cloudflare.Zone, cloudflare.Tunnel, dnsClaim, string, error) {
 	accountID, err := promptCloudflareAccountID()
 	if err != nil {
 		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, dnsClaim{}, "", err
@@ -427,10 +426,12 @@ func provisionWithToken(ctx context.Context, tunnelName, listen string) (*cloudf
 	if _, err := rand.Read(secret); err != nil {
 		return nil, zone, cloudflare.Tunnel{}, dnsClaim{}, "", err
 	}
+	// Named from the hostname it will serve, which is only known now — and which
+	// is why the name is no longer decided before the endpoint is chosen.
 	var tunnel cloudflare.Tunnel
 	if err := ui.Spinner("Creating Cloudflare tunnel…", func() error {
 		var e error
-		tunnel, e = c.CreateTunnel(ctx, zone.AccountID, tunnelName, secret)
+		tunnel, e = c.CreateTunnel(ctx, zone.AccountID, tunnelNameFor(hostname), secret)
 		return e
 	}); err != nil {
 		return c, zone, tunnel, dnsClaim{}, hostname, err
@@ -535,7 +536,7 @@ func describeExistingRecord(hostname, content string) string {
 	return hostname + " already points at " + content + ", which rec-deploy did not create. Replacing it will break whatever uses that name. Answer no and pick a different subdomain unless you are certain."
 }
 
-func provisionWithBrowser(ctx context.Context, bin, tunnelName, listen string) (cloudflare.Zone, cloudflare.Tunnel, string, error) {
+func provisionWithBrowser(ctx context.Context, bin, listen string) (cloudflare.Zone, cloudflare.Tunnel, string, error) {
 	home, err := os.MkdirTemp("", "rec-deploy-cloudflare-login-*")
 	if err != nil {
 		return cloudflare.Zone{}, cloudflare.Tunnel{}, "", err
@@ -572,7 +573,7 @@ func provisionWithBrowser(ctx context.Context, bin, tunnelName, listen string) (
 	if !ok {
 		return cloudflare.Zone{}, cloudflare.Tunnel{}, hostname, ui.ErrBack
 	}
-	cmd = exec.CommandContext(ctx, bin, "tunnel", "create", "--output", "json", tunnelName)
+	cmd = exec.CommandContext(ctx, bin, "tunnel", "create", "--output", "json", tunnelNameFor(hostname))
 	cmd.Env = append(os.Environ(), "HOME="+home)
 	out, err := cmd.Output()
 	if err != nil {
@@ -642,21 +643,28 @@ func zonesForAccount(zones []cloudflare.Zone, accountID string) []cloudflare.Zon
 	return filtered
 }
 
-// randomMCPSubdomain proposes a fresh name for this endpoint. It is random
-// rather than derived from the server's hostname because the derived one is the
-// same on every install of the same box: reinstalling then landed on the
-// hostname the previous install had already published, and the collision had to
-// be resolved in the middle of setup. Typing over it is still how a URL that MCP
-// clients are already configured with gets kept.
-func randomMCPSubdomain() string {
-	b := make([]byte, 4)
+// randomLabel returns n random bytes as hex, for the part of a Cloudflare name
+// that has to differ between installs. Everything derived from the server's own
+// hostname is identical on every install of that box, which is what made both
+// the endpoint and its tunnel collide with the ones the previous install left.
+//
+// It falls back to the server's hostname rather than failing: crypto/rand does
+// not fail in practice, and losing the whole of MCP setup over the default value
+// of a field would be a worse trade than a name that might collide and says so.
+func randomLabel(n int) string {
+	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		// crypto/rand does not fail in practice, and a name the operator can
-		// type over beats failing setup over the default value of a field.
-		return "mcp-" + hostnamePart.ReplaceAllString(strings.ToLower(mcpServerHostname()), "-")
+		return hostnamePart.ReplaceAllString(strings.ToLower(mcpServerHostname()), "-")
 	}
 
-	return "mcp-" + hex.EncodeToString(b)
+	return hex.EncodeToString(b)
+}
+
+// randomMCPSubdomain proposes a fresh name for this endpoint, so a reinstall
+// does not land on the hostname the previous install already published. Typing
+// over it is how a URL that MCP clients are configured with gets kept.
+func randomMCPSubdomain() string {
+	return "mcp-" + randomLabel(4)
 }
 
 func promptMCPHostname(zone string) (string, error) {
@@ -686,8 +694,20 @@ func availableMCPlisten(first, last int) (string, error) {
 	return "", fmt.Errorf("no free MCP port in 127.0.0.1:%d-%d", first, last)
 }
 
-func defaultTunnelName() string {
-	return "rec-deploy-" + hostnamePart.ReplaceAllString(strings.ToLower(mcpServerHostname()), "-")
+// tunnelNameFor names the tunnel after the endpoint it serves, plus a random
+// suffix. Cloudflare rejects a duplicate tunnel name with HTTP 409, and the name
+// used to be derived from the server's hostname alone — identical on every
+// install of the same box, so each reinstall collided with the tunnel the last
+// one left behind. The endpoint's own label keeps the tunnel identifiable in the
+// Cloudflare dashboard; the suffix is what makes reinstalling, including onto a
+// subdomain being reused on purpose, safe.
+func tunnelNameFor(hostname string) string {
+	label := hostname
+	if i := strings.Index(hostname, "."); i > 0 {
+		label = hostname[:i]
+	}
+
+	return "rec-deploy-" + hostnamePart.ReplaceAllString(strings.ToLower(label), "-") + "-" + randomLabel(2)
 }
 func mcpServerHostname() string {
 	h, _ := os.Hostname()

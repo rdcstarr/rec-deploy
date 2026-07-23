@@ -229,15 +229,17 @@ main() {
 			# enable + restart, not `enable --now`: --now is a no-op on an already-
 			# active unit, which would leave a running daemon on the stale config the
 			# wizard just rewrote. restart also starts a stopped unit.
-			systemctl enable rec-deploy
+			#
+			# --quiet drops systemctl's "Created symlink ..." line: it reports the
+			# mechanism, and the line below reports the outcome.
+			systemctl enable --quiet rec-deploy
 			systemctl restart rec-deploy || true
 			state="$(systemctl is-active rec-deploy || true)"
 			if [ "$state" = "active" ]; then
+				# No "next steps" block here: the wizard's own summary already ends
+				# with that pointer, and printing it twice in different words reads
+				# as two instructions rather than one.
 				ok "rec-deploy is running"
-				echo
-				info "next: register a repository and clone it where you want it deployed"
-				printf '    rec-deploy repo add <owner>/<repo>\n'
-				printf '    rec-deploy repo install <owner>/<repo> /var/www/site\n'
 			else
 				warn "rec-deploy is not running (state: ${state:-unknown}) — inspect it with:  journalctl -u rec-deploy -n 50"
 			fi

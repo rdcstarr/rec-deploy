@@ -288,3 +288,42 @@ func TestDescribeExistingRecordTellsOurTunnelFromTheirs(t *testing.T) {
 		t.Errorf("a foreign record does not say what it currently points at: %q", theirs)
 	}
 }
+
+// TestTunnelNameForIsUniquePerInstall is the second half of the reinstall
+// collision. The endpoint's DNS record was made unique first, but the tunnel
+// name was still derived from the server's hostname alone — identical on every
+// install of the same box — so Cloudflare rejected the second one with HTTP 409
+// ("you already have a tunnel with this name") even though the subdomain was
+// freshly random.
+func TestTunnelNameForIsUniquePerInstall(t *testing.T) {
+	const hostname = "mcp-3f9a2b7c.example.com"
+
+	seen := make(map[string]bool, 8)
+	for i := 0; i < 8; i++ {
+		name := tunnelNameFor(hostname)
+		if !strings.HasPrefix(name, "rec-deploy-") {
+			t.Fatalf("tunnel name %q is not identifiable as rec-deploy's", name)
+		}
+		if !strings.Contains(name, "mcp-3f9a2b7c") {
+			t.Errorf("tunnel name %q does not name the endpoint it serves", name)
+		}
+		if strings.Contains(name, ".") {
+			t.Errorf("tunnel name %q carries the zone, not just the endpoint's label", name)
+		}
+		seen[name] = true
+	}
+	if len(seen) != 8 {
+		t.Errorf("only %d of 8 tunnel names were distinct — a reinstall would collide again", len(seen))
+	}
+}
+
+// TestTunnelNameForSurvivesAReusedSubdomain covers the takeover path: reusing a
+// previous subdomain on purpose must still produce a tunnel name the previous
+// install did not already take.
+func TestTunnelNameForSurvivesAReusedSubdomain(t *testing.T) {
+	first := tunnelNameFor("mcp-stable.example.com")
+	second := tunnelNameFor("mcp-stable.example.com")
+	if first == second {
+		t.Errorf("reusing a subdomain produced the same tunnel name twice (%q) — the second install would be rejected", first)
+	}
+}
