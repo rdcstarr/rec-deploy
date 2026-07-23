@@ -250,6 +250,26 @@ func capture(t *testing.T, f func()) string {
 	return b.String()
 }
 
+// TestStatusMenuOffersScanAndOneLifecycleAction pins that the status screen's
+// actions always include scan, and offer exactly the service action that makes
+// sense for the daemon's current state — never both start and stop.
+func TestStatusMenuOffersScanAndOneLifecycleAction(t *testing.T) {
+	seen := make(map[string]bool)
+	for _, option := range statusMenuOptions(context.Background()) {
+		seen[option.Value] = true
+	}
+
+	if !seen["scan"] {
+		t.Errorf("status actions do not include scan: %v", seen)
+	}
+	if !seen["back"] {
+		t.Errorf("status actions have no way back: %v", seen)
+	}
+	if seen["start"] && seen["stop"] {
+		t.Errorf("status actions offer both start and stop: %v", seen)
+	}
+}
+
 // TestDeployRow renders one history line: when it ran, against what it did.
 func TestDeployRow(t *testing.T) {
 	row := deployRow(store.Deploy{

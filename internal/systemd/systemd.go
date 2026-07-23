@@ -89,6 +89,13 @@ func EnableNow(ctx context.Context, unit string) error {
 // Restart restarts unit, starting it when it is currently stopped.
 func Restart(ctx context.Context, unit string) error { return run(ctx, "restart", unit) }
 
+// Start starts unit without changing whether it runs at boot.
+func Start(ctx context.Context, unit string) error { return run(ctx, "start", unit) }
+
+// Stop stops unit without disabling it at boot: an operator pausing the daemon
+// to work on a server is not saying it should never come back.
+func Stop(ctx context.Context, unit string) error { return run(ctx, "stop", unit) }
+
 // DisableNow disables unit at boot and stops it immediately.
 func DisableNow(ctx context.Context, unit string) error {
 	return run(ctx, "disable", "--now", unit)
