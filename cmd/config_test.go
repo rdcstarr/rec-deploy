@@ -92,6 +92,46 @@ func TestConfigRegistryDrivesGetSetAndCopy(t *testing.T) {
 	}
 }
 
+// TestConfigMenuDescribesInsteadOfDumping pins that the section list says what
+// each section is for. It used to print the current values — "(chat 5775201531,
+// token ••••oJZc)" — which is noise on a screen whose whole job is to be picked
+// from, and which put a masked secret on a screen that did not need one.
+func TestConfigMenuDescribesInsteadOfDumping(t *testing.T) {
+	saved := cfg
+	defer func() { cfg = saved }()
+	cfg = &config.Config{
+		Listen:    "0.0.0.0:9000",
+		PublicURL: "http://198.51.100.7:9000",
+		GitHub:    config.GitHubConfig{Token: "ghp_averysecrettokenvalue"},
+		Notify: config.NotifyConfig{
+			Telegram: config.TelegramConfig{Token: "12345:secret", ChatID: "5775201531"},
+			Email:    config.EmailConfig{SMTP: "smtp.example.com:587", From: "a@example.com", To: "b@example.com"},
+		},
+	}
+
+	for _, option := range configMenuOptions() {
+		for _, leaked := range []string{"0.0.0.0:9000", "198.51.100.7", "5775201531", "smtp.example.com", "b@example.com", "••••"} {
+			if strings.Contains(option.Label, leaked) {
+				t.Errorf("the config menu still shows the value %q: %q", leaked, option.Label)
+			}
+		}
+	}
+
+	if len(configMenuOptions()) != len(configSections)+1 {
+		t.Errorf("the config menu is not one entry per section plus Exit: %d sections, %d options", len(configSections), len(configMenuOptions()))
+	}
+}
+
+// TestEverySectionIsDescribed pins that adding a section to the registry means
+// writing what it is for, not shipping a blank row.
+func TestEverySectionIsDescribed(t *testing.T) {
+	for _, section := range configSections {
+		if section.Description == "" {
+			t.Errorf("config section %q has no description", section.Key)
+		}
+	}
+}
+
 func TestValidateConfigValue(t *testing.T) {
 	tests := []struct {
 		name    string

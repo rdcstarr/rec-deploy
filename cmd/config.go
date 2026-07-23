@@ -48,21 +48,24 @@ func newConfigCmd() *cobra.Command {
 // out, running the chosen section's form and saving what it collected.
 func configMenu(ctx context.Context) error {
 	return (ui.Menu{
-		Title: ui.ScreenPath("rec-deploy", "Config"),
-		Options: func() []ui.Option {
-			options := ui.DescribedOptions(
-				ui.DescribedOption{Name: "Server", Description: serverSummary(), Value: "server"},
-				ui.DescribedOption{Name: "GitHub", Description: githubSummary(), Value: "github"},
-				ui.DescribedOption{Name: "Discovery", Description: discoverySummary(), Value: "discovery"},
-				ui.DescribedOption{Name: "Telegram", Description: telegramSummary(), Value: "telegram"},
-				ui.DescribedOption{Name: "Email", Description: emailSummary(), Value: "email"},
-			)
-			return append(options, ui.Option{Label: "Exit", Value: "exit"})
-		},
+		Title:      ui.ScreenPath("rec-deploy", "Config"),
+		Options:    configMenuOptions,
 		Help:       func() string { return menuHelp },
 		BackValues: map[string]bool{"exit": true},
 		Handle:     func(section string) error { return openConfigSection(ctx, section) },
 	}).Run()
+}
+
+// configMenuOptions lists the sections, each described by what it configures.
+// It is built from configSections rather than hand-listed, so a new section
+// cannot appear in `config get` and be missing from the menu.
+func configMenuOptions() []ui.Option {
+	items := make([]ui.DescribedOption, 0, len(configSections))
+	for _, section := range configSections {
+		items = append(items, ui.DescribedOption{Name: section.Title, Description: section.Description, Value: section.Key})
+	}
+
+	return append(ui.DescribedOptions(items...), ui.Option{Label: "Exit", Value: "exit"})
 }
 
 // openConfigSection opens a scoped overview before editing one setting. Secret
@@ -77,17 +80,21 @@ func openConfigSection(ctx context.Context, section string) error {
 	}).Run()
 }
 
+// configSection is one group of settings, as the config menu presents it. The
+// description says what the section is for; the values live one level down,
+// inside the section, where they are being edited.
 type configSection struct {
-	Key   string
-	Title string
+	Key         string
+	Title       string
+	Description string
 }
 
 var configSections = []configSection{
-	{Key: "server", Title: "Server"},
-	{Key: "github", Title: "GitHub"},
-	{Key: "discovery", Title: "Discovery"},
-	{Key: "telegram", Title: "Telegram"},
-	{Key: "email", Title: "Email"},
+	{Key: "server", Title: "Server", Description: "where the daemon listens and the URL GitHub posts to"},
+	{Key: "github", Title: "GitHub", Description: "the token that manages deploy keys and webhooks"},
+	{Key: "discovery", Title: "Discovery", Description: "where checkouts are looked for on this server"},
+	{Key: "telegram", Title: "Telegram", Description: "send deploy results to a Telegram chat"},
+	{Key: "email", Title: "Email", Description: "send deploy results by email"},
 }
 
 // configField is the single source of truth for every configurable value. The
@@ -558,26 +565,6 @@ func printConfig() error {
 	ui.Info("run in a terminal for the interactive form, or use `rec-deploy config set <key> <value>`")
 
 	return nil
-}
-
-// serverSummary describes the daemon's listen address and public URL. The
-// summaries carry only the state, never the section name.
-func serverSummary() string {
-	cfg := Config()
-
-	return "(listen " + cfg.Listen + ", public " + orNotSet(cfg.PublicURL) + ")"
-}
-
-// githubSummary describes the GitHub credentials.
-func githubSummary() string {
-	return "(token " + redact(Config().GitHub.Token) + ")"
-}
-
-// discoverySummary describes the filesystem walk settings.
-func discoverySummary() string {
-	cfg := Config()
-
-	return fmt.Sprintf("(%d roots, %d pruned)", len(cfg.Discovery.Roots), len(cfg.Discovery.Prune))
 }
 
 // telegramSummary describes the current Telegram configuration.
