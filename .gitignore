@@ -1,0 +1,25 @@
+# Binaries
+/rec-deploy
+/dist/
+*.exe
+*.test
+*.out
+
+# Local state (SQLite in a dev checkout)
+*.db
+*.db-wal
+*.db-shm
+
+# Coverage
+coverage.*
+
+# Design specs, implementation plans and agent scratch — working notes, kept out
+# of the repo
+/docs/
+/.superpowers/
+
+# OS / editor cruft
+.DS_Store
+*~
+.idea/
+.vscode/

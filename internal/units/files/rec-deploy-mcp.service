@@ -1,0 +1,30 @@
+[Unit]
+Description=rec-deploy read-only MCP origin
+Documentation=https://github.com/rdcstarr/rec-deploy
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/rec-deploy mcp serve-http
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+# SQLite read-only connections still maintain WAL/SHM coordination files. The
+# MCP process opens the database with mode=ro; this exception exists only so
+# SQLite can coordinate safely with the webhook daemon's writer.
+ReadWritePaths=/var/lib/rec-deploy
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+MemoryMax=256M
+TasksMax=64
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

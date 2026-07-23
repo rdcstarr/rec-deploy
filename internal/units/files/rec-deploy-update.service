@@ -1,0 +1,24 @@
+[Unit]
+Description=rec-deploy self-update
+Documentation=https://github.com/rdcstarr/rec-deploy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+
+# self-update --restart legitimately blocks while the daemon drains in-flight
+# deploys — up to rec-deploy.service's TimeoutStopSec (15 min) on a try-restart.
+# Type=oneshot already disables the start timeout, but state it explicitly so a
+# future edit (a different Type, or an added TimeoutStartSec) cannot silently
+# reintroduce a 90s SIGKILL mid-update that would look like a spurious rollback.
+TimeoutStartSec=infinity
+
+# Its own unit, so its own cgroup. This is the whole design: restarting
+# rec-deploy.service from inside rec-deploy.service would deliver systemd's
+# SIGTERM to the process asking for the restart.
+ExecStart=/usr/bin/rec-deploy self-update --restart
+
+StandardOutput=journal
+StandardError=journal

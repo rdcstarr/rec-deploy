@@ -1,0 +1,16 @@
+[Unit]
+Description=Check for a new rec-deploy release
+
+[Timer]
+OnCalendar=hourly
+
+# A fleet installed from the same script would otherwise hit the GitHub API on
+# the same second of every hour.
+RandomizedDelaySec=10m
+
+# A server that was powered off catches up on boot instead of waiting for the
+# next whole hour.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

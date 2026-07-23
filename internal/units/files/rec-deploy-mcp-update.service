@@ -1,0 +1,12 @@
+[Unit]
+Description=Update the managed cloudflared dependency
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/rec-deploy mcp dependency update
+TimeoutStartSec=10m
+StandardOutput=journal
+StandardError=journal

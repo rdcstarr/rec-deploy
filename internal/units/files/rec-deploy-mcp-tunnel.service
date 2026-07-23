@@ -1,0 +1,30 @@
+[Unit]
+Description=Cloudflare Tunnel for rec-deploy MCP
+Documentation=https://github.com/rdcstarr/rec-deploy
+After=network-online.target rec-deploy-mcp.service
+Wants=network-online.target
+Requires=rec-deploy-mcp.service
+
+[Service]
+Type=simple
+DynamicUser=yes
+LoadCredential=tunnel.json:/var/lib/rec-deploy/mcp/tunnel.json
+LoadCredential=cloudflared.yml:/var/lib/rec-deploy/mcp/cloudflared.yml
+ExecStart=/usr/local/lib/rec-deploy/cloudflared tunnel --no-autoupdate --config %d/cloudflared.yml run --credentials-file %d/tunnel.json
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+MemoryMax=256M
+TasksMax=64
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

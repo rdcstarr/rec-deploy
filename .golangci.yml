@@ -1,0 +1,35 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - revive
+  settings:
+    errcheck:
+      # Writes to in-memory / stdout-style writers never return an actionable
+      # error. Real unchecked errors (including Close) are still flagged.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    rules:
+      # Cobra fixes the RunE/PersistentPreRunE signature, so an unused cmd/args
+      # parameter is expected rather than a smell.
+      - linters:
+          - revive
+        text: unused-parameter
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/rdcstarr/rec-deploy

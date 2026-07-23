@@ -1,0 +1,109 @@
+version: 2
+
+project_name: rec-deploy
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: rec-deploy
+    main: .
+    binary: rec-deploy
+    env:
+      # No cgo, ever: the binary has to run on a bare HestiaCP box with no
+      # toolchain and no matching libc.
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/rdcstarr/rec-deploy/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/rdcstarr/rec-deploy/internal/buildinfo.Commit={{ .ShortCommit }}
+      - -X github.com/rdcstarr/rec-deploy/internal/buildinfo.Date={{ .Date }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # Apple Silicon only for darwin (no Intel build).
+      - goos: darwin
+        goarch: amd64
+
+archives:
+  - id: rec-deploy
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # The units ship in the tarball so install.sh takes them from the same tag as
+    # the binary, and so checksums.txt covers them: it is generated over the
+    # release assets, and a unit that is not in one is a root ExecStart nothing
+    # can verify. self-update ignores them — it extracts by basename and only
+    # wants the binary.
+    files:
+      # src moved into the package that embeds them; dst keeps the tarball layout
+      # install.sh already reads.
+      - src: internal/units/files/*
+        dst: packaging
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+nfpms:
+  - id: rec-deploy
+    package_name: rec-deploy
+    maintainer: rdcstarr <rdcstarr@users.noreply.github.com>
+    description: Deploy GitHub repositories in place on a Linux server.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      # Not type: config. A local edit belongs in a drop-in —
+      # /etc/systemd/system/rec-deploy.service.d/override.conf — which is
+      # systemd's own answer and survives every upgrade AND every purge. Marking
+      # these config made them conffiles, and dpkg keeps a conffile through
+      # `dpkg -r`: the units outlived the binary, with ExecStart pointing at a
+      # file that was gone. A conffile outside /etc is against Debian policy
+      # besides.
+      - src: internal/units/files/rec-deploy.service
+        dst: /lib/systemd/system/rec-deploy.service
+      - src: internal/units/files/rec-deploy-mcp.service
+        dst: /lib/systemd/system/rec-deploy-mcp.service
+      - src: internal/units/files/rec-deploy-mcp-tunnel.service
+        dst: /lib/systemd/system/rec-deploy-mcp-tunnel.service
+      - src: internal/units/files/rec-deploy-mcp-update.service
+        dst: /lib/systemd/system/rec-deploy-mcp-update.service
+      - src: internal/units/files/rec-deploy-mcp-update.timer
+        dst: /lib/systemd/system/rec-deploy-mcp-update.timer
+
+      # The updater. Installed but NOT enabled: a root daemon that replaces its
+      # own binary unattended is the operator's decision, and `rec-deploy init`
+      # is where they make it.
+      - src: internal/units/files/rec-deploy-update.service
+        dst: /lib/systemd/system/rec-deploy-update.service
+      - src: internal/units/files/rec-deploy-update.timer
+        dst: /lib/systemd/system/rec-deploy-update.timer
+
+      # 0700, both: /etc/rec-deploy holds the GitHub token, /var/lib/rec-deploy holds
+      # the HMAC secrets and the ed25519 private keys. systemd re-asserts these
+      # modes on every start, but the package has to create them correctly for
+      # the operator who runs `rec-deploy init` before ever starting the daemon.
+      - dst: /etc/rec-deploy
+        type: dir
+        file_info:
+          mode: 0700
+      - dst: /var/lib/rec-deploy
+        type: dir
+        file_info:
+          mode: 0700

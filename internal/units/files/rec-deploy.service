@@ -1,0 +1,55 @@
+[Unit]
+Description=rec-deploy deploy daemon
+Documentation=https://github.com/rdcstarr/rec-deploy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Root by design. The daemon drops into the UNIX owner of each deploy target
+# through the kernel (syscall.Credential), which is why it needs no passwordless
+# sudo — but it does need the privilege to make that drop in the first place.
+User=root
+
+ExecStart=/usr/bin/rec-deploy serve
+Restart=on-failure
+RestartSec=5s
+
+# The daemon drains the deploys still running before it exits (drainTimeout is
+# 15 minutes), then records and notifies them. systemd's default is 90 seconds,
+# which would SIGKILL the drain and make it theatre.
+TimeoutStopSec=960
+
+# /var/lib/rec-deploy — state.db, the ed25519 deploy keys, the flock files.
+# /etc/rec-deploy   — config.yaml, which holds the GitHub token.
+# Both root-only: they contain every secret this binary owns.
+StateDirectory=rec-deploy
+StateDirectoryMode=0700
+ConfigurationDirectory=rec-deploy
+ConfigurationDirectoryMode=0700
+
+# LOAD-BEARING — do not "harden" these. They look like an oversight and are not:
+#
+#   NoNewPrivileges=no   A deploy runs each post_deploy step as the directory's
+#                        owner via setuid/setgid. NoNewPrivileges=yes makes the
+#                        kernel refuse the setuid transition, and every deploy
+#                        fails with EPERM.
+#
+#   ProtectSystem=false  Deploy targets are arbitrary directories chosen by the
+#                        operator — /home/*/web/*/public_html, /var/www, /srv,
+#                        /opt. Any ProtectSystem setting mounts parts of the
+#                        filesystem read-only, and `git reset --hard` inside a
+#                        target under /srv or /opt then fails with EROFS.
+#
+# Narrowing the daemon's reach means narrowing the set of directories it can
+# deploy to, which is the whole job. If you want to sandbox it, sandbox the
+# machine, not the unit.
+NoNewPrivileges=no
+ProtectSystem=false
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

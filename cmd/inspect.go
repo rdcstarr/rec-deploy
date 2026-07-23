@@ -1,0 +1,711 @@
+package cmd
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/rdcstarr/rec-deploy/internal/config"
+	"github.com/rdcstarr/rec-deploy/internal/deploy"
+	"github.com/rdcstarr/rec-deploy/internal/discover"
+	"github.com/rdcstarr/rec-deploy/internal/store"
+	"github.com/rdcstarr/rec-deploy/internal/systemd"
+	"github.com/rdcstarr/rec-deploy/internal/ui"
+	"github.com/rdcstarr/rec-deploy/internal/units"
+)
+
+// newScanCmd builds `scan`: run discovery and show everything it finds.
+func newScanCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "scan",
+		Short:   "Show every checkout discovery finds",
+		Long:    "scan walks the configured discovery roots and prints every checkout carrying a .rec-deploy.yml — the broken ones included, each flagged with what is wrong with it.",
+		Args:    cobra.NoArgs,
+		Example: "rec-deploy scan\nrec-deploy scan --json",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			found, err := scanInstallations(cmd.Context())
+			if err != nil {
+				return err
+			}
+
+			if flagJSON {
+				out := make([]map[string]any, 0, len(found))
+				for _, in := range found {
+					row := installJSON(in)
+					row["repository"] = in.Repository
+					out = append(out, row)
+				}
+
+				return ui.PrintJSON(out)
+			}
+
+			renderScan(found)
+
+			return nil
+		},
+	}
+}
+
+// renderScan prints one line per installation. It shows what discovery found,
+// not what it approves of: a checkout that will not deploy is listed with the
+// reason, never omitted — an installation missing from the output is the one
+// question `rec-deploy scan` exists to answer.
+func renderScan(found []discover.Installation) {
+	if len(found) == 0 {
+		ui.Warn("no installation found — check the roots with `rec-deploy config get discovery.roots`")
+
+		return
+	}
+
+	rows := make([][2]string, 0, len(found))
+	for _, in := range found {
+		rows = append(rows, scanRow(in))
+	}
+
+	ui.Title(plural(len(found), "installation"))
+	ui.Out(ui.TwoCol(rows))
+}
+
+// scanRow renders one checkout: its path against its repository, branch, owner
+// and every marker that applies — ⚠ root (push access here is root on this
+// server), ⚠ https (an origin the deploy key cannot authenticate), ⚠ mixed
+// (naming the stray file), and ✗ with the error of a manifest that will not
+// parse or an origin that contradicts it.
+func scanRow(in discover.Installation) [2]string {
+	desc := installFlags(in)
+	if in.Repository != "" {
+		desc = append([]string{in.Repository}, desc...)
+	}
+
+	return [2]string{in.Path, strings.Join(desc, "  ")}
+}
+
+// newStatusCmd builds `status`: is the daemon up, what is registered, and what
+// did each checkout last do.
+func newStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "status",
+		Short:   "Show daemon health, repositories and the last deploy per path",
+		Long:    "status probes the webhook daemon, lists the registered repositories, and shows the last deploy recorded for every checkout.",
+		Args:    cobra.NoArgs,
+		Example: "rec-deploy status\nrec-deploy status --json",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return showStatus(cmd.Context())
+		},
+	}
+}
+
+// showStatus renders the three things an operator asks for at once: whether the
+// daemon is answering, which repositories are registered, and where each
+// checkout stands.
+func showStatus(ctx context.Context) error {
+	st, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	repos, err := st.Repos(ctx)
+	if err != nil {
+		return err
+	}
+
+	paths, err := st.LastDeployPerPath(ctx)
+	if err != nil {
+		return err
+	}
+
+	// The probe blocks for up to two seconds and prints nothing of its own.
+	url := healthURL(Config())
+	var up bool
+	if err := ui.Spinner("Probing the daemon…", func() error {
+		up = daemonUp(ctx, url)
+
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if flagJSON {
+		return ui.PrintJSON(map[string]any{
+			"daemon":       map[string]any{"url": url, "healthy": up},
+			"auto_update":  systemd.IsEnabled(ctx, updateTimer),
+			"units":        unitStates(ctx),
+			"repositories": repoStates(repos),
+			"paths":        pathStates(paths),
+		})
+	}
+
+	autoUpdate := systemd.IsEnabled(ctx, updateTimer)
+	states := unitStates(ctx)
+	ui.Title(ui.ScreenPath("rec-deploy", "Status"))
+	renderStatusOverview(up, url, systemd.Available(), autoUpdate, states, repos, paths)
+	ui.Out("")
+
+	renderRepoStates(repos)
+	ui.Out("")
+	renderPathStates(paths)
+
+	return nil
+}
+
+// renderStatusOverview puts actionable failures before healthy facts so an
+// operator can answer "what needs attention?" without scanning every detail.
+func renderStatusOverview(up bool, url string, systemdAvailable, autoUpdate bool, states []units.Status, repos []store.Repo, paths []store.DeployPath) {
+	var issues, healthy []string
+	if up {
+		healthy = append(healthy, "daemon answering at "+url)
+	} else {
+		issues = append(issues, "daemon not answering at "+url+" — start it with `systemctl start rec-deploy`")
+	}
+
+	if systemdAvailable {
+		if autoUpdate {
+			healthy = append(healthy, "auto-update enabled")
+		} else {
+			healthy = append(healthy, "auto-update disabled (optional)")
+		}
+	}
+	for _, state := range states {
+		switch state.State {
+		case units.StateCurrent:
+			healthy = append(healthy, state.Unit+" current")
+		case units.StateStale:
+			issues = append(issues, state.Unit+" differs from this version — re-run the installer")
+		case units.StateMissing:
+			issues = append(issues, state.Unit+" is not installed — re-run the installer")
+		case units.StateMasked:
+			issues = append(issues, state.Unit+" is masked — run `systemctl unmask "+state.Unit+"`")
+		case units.StateUnreadable:
+			issues = append(issues, state.Unit+" could not be read: "+state.Detail)
+		}
+	}
+
+	if len(repos) == 0 {
+		issues = append(issues, "no repository registered — run `rec-deploy repo add <owner/repo>`")
+	} else {
+		healthy = append(healthy, plural(len(repos), "repository")+" registered")
+	}
+	failed := 0
+	for _, path := range paths {
+		if path.Status == store.StatusFailed || path.Status == store.StatusInterrupted || path.Status == store.StatusRolledBack {
+			failed++
+		}
+	}
+	if failed > 0 {
+		issues = append(issues, plural(failed, "installation")+" needs attention")
+	} else if len(paths) > 0 {
+		healthy = append(healthy, plural(len(paths), "installation")+" without a recorded failure")
+	}
+
+	if len(issues) > 0 {
+		ui.Out("")
+		ui.Title(fmt.Sprintf("needs attention (%d)", len(issues)))
+		for _, issue := range issues {
+			ui.Warn(issue)
+		}
+	}
+	if len(healthy) > 0 {
+		ui.Out("")
+		ui.Title(fmt.Sprintf("healthy (%d)", len(healthy)))
+		for _, item := range healthy {
+			ui.Success(item)
+		}
+	}
+}
+
+// unitStates compares each unit systemd resolved against the copy this binary
+// ships.
+//
+// self-update replaces only the binary, so the units a box runs are whichever
+// ones its original installer left — and every update widens the gap, silently.
+// Reporting it is the whole fix: `install.sh` re-run takes the units from the
+// same verified tag as the binary, whereas a repair from inside self-update would
+// put a root-owned unit rewrite in the one unattended path whose rollback can only
+// restore a binary.
+func unitStates(ctx context.Context) []units.Status {
+	if !systemd.Available() {
+		return nil
+	}
+
+	out := make([]units.Status, 0, len(units.Names))
+	for _, name := range units.Names {
+		// The path systemd resolved, never one inferred from a directory: /etc
+		// shadows /lib, so a box installed by two routes runs the copy systemd
+		// picked and a guess would compare the file nobody runs.
+		s := units.Compare(name, systemd.FragmentPath(ctx, name))
+
+		// A masked unit resolves to a /dev/null symlink, which reads as zero bytes
+		// with no error — so it would compare as drifted and be answered with "re-run
+		// the installer", which the mask would simply beat again. Masking is a
+		// deliberate act; report it as itself.
+		if systemd.LoadState(ctx, name) == systemd.LoadMasked {
+			s.State = units.StateMasked
+		}
+
+		out = append(out, s)
+	}
+
+	return out
+}
+
+// repoStates renders the registered repositories for --json. The webhook secret
+// and the URL token are never emitted, only whether they are set.
+func repoStates(repos []store.Repo) []map[string]any {
+	out := make([]map[string]any, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, map[string]any{
+			"repository": r.Repository,
+			"key_id":     r.GitHubKeyID,
+			"hook_id":    r.GitHubHookID,
+			"token":      tokenState(r.Token),
+			"secret":     tokenState(r.Secret),
+			"created_at": r.CreatedAt,
+		})
+	}
+
+	return out
+}
+
+// pathStates renders the last deploy of each checkout for --json.
+func pathStates(paths []store.DeployPath) []map[string]any {
+	out := make([]map[string]any, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, map[string]any{
+			"path":        p.Path,
+			"user":        p.User,
+			"ran_as_root": p.RanAsRoot,
+			"status":      p.Status,
+			"reason":      p.Reason,
+			"sha":         p.NewSHA,
+		})
+	}
+
+	return out
+}
+
+// renderRepoStates lists the registered repositories with their webhook address,
+// the token in it masked.
+func renderRepoStates(repos []store.Repo) {
+	if len(repos) == 0 {
+		ui.Warn("no repository is registered — run `rec-deploy repo add <owner/repo>`")
+
+		return
+	}
+
+	rows := make([][2]string, 0, len(repos))
+	for _, r := range repos {
+		rows = append(rows, [2]string{r.Repository, redactedHookURL(r.Token)})
+	}
+
+	ui.Title("repositories")
+	ui.Out(ui.TwoCol(rows))
+}
+
+// renderPathStates lists the last deploy of every checkout. A root-owned target
+// is flagged here as it is everywhere else.
+func renderPathStates(paths []store.DeployPath) {
+	if len(paths) == 0 {
+		ui.Info("no deploy has run on this server yet")
+
+		return
+	}
+
+	rows := make([][2]string, 0, len(paths))
+	for _, p := range paths {
+		rows = append(rows, [2]string{p.Path, strings.Join(pathFlags(p), "  ")})
+	}
+
+	ui.Title("last deploy per path")
+	ui.Out(ui.TwoCol(rows))
+}
+
+// pathFlags describes one checkout's last deploy: its outcome, the user it ran
+// as, the commit it landed on, and why it skipped or failed.
+func pathFlags(p store.DeployPath) []string {
+	flags := []string{p.Status}
+	if p.User != "" {
+		flags = append(flags, p.User)
+	}
+	if p.RanAsRoot {
+		flags = append(flags, "⚠ root")
+	}
+	if p.NewSHA != "" {
+		flags = append(flags, shortSHA(p.NewSHA))
+	}
+	if p.Reason != "" {
+		flags = append(flags, p.Reason)
+	}
+
+	return flags
+}
+
+// healthURL is the address status probes: the public URL GitHub delivers to when
+// one is configured — that is the path a webhook actually travels — otherwise
+// the local listen address. A wildcard bind (0.0.0.0, ::, or a bare :9000) is
+// not an address to connect to, so it probes the loopback the daemon is
+// listening on too.
+func healthURL(cfg *config.Config) string {
+	if url := strings.TrimSpace(cfg.PublicURL); url != "" {
+		return strings.TrimRight(url, "/") + "/health"
+	}
+
+	host, port, err := net.SplitHostPort(cfg.Listen)
+	if err != nil {
+		return "http://" + cfg.Listen + "/health"
+	}
+
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+
+	return "http://" + net.JoinHostPort(host, port) + "/health"
+}
+
+// daemonUp reports whether GET url answers 200 within two seconds. The daemon is
+// either answering now or it is not: status must not hang on a public URL a
+// firewall drops.
+func daemonUp(ctx context.Context, url string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	return resp.StatusCode == http.StatusOK
+}
+
+// newLogsCmd builds `logs [owner/repo]`: the deploy history, and with --path the
+// command-by-command output of one checkout's last deploy.
+func newLogsCmd() *cobra.Command {
+	var (
+		path  string
+		limit int
+	)
+
+	cmd := &cobra.Command{
+		Use:     "logs [owner/repo]",
+		Short:   "Show the deploy history",
+		Long:    "logs prints the deploys this server ran, newest first. With --path it prints the exit code, duration and captured output of every command of that checkout's last deploy — the diagnostic a failed deploy is read with.",
+		Args:    cobra.MaximumNArgs(1),
+		Example: "rec-deploy logs\nrec-deploy logs rdcstarr/tema-mea --limit 5\nrec-deploy logs rdcstarr/tema-mea --path /var/www/api",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var slug string
+			if len(args) > 0 {
+				slug = args[0]
+			}
+
+			if path == "" {
+				return listLogs(cmd.Context(), slug, limit)
+			}
+
+			// Deploys are recorded under the absolute path discovery reports, so
+			// --path ./site and a trailing slash have to resolve to that string.
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				return err
+			}
+
+			return pathLog(cmd.Context(), slug, abs)
+		},
+	}
+
+	cmd.Flags().StringVar(&path, "path", "", "show the last deploy of this checkout, command by command")
+	cmd.Flags().IntVar(&limit, "limit", 20, "how many deploys to show")
+
+	return cmd
+}
+
+// listLogs prints the deploy history, newest first, optionally narrowed to one
+// repository.
+func listLogs(ctx context.Context, slug string, limit int) error {
+	st, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	if slug != "" {
+		if _, err := registeredRepo(ctx, st, slug); err != nil {
+			return err
+		}
+	}
+
+	deploys, err := st.Deploys(ctx, slug, limit)
+	if err != nil {
+		return err
+	}
+
+	names, err := repoNames(ctx, st)
+	if err != nil {
+		return err
+	}
+
+	if flagJSON {
+		out := make([]map[string]any, 0, len(deploys))
+		for _, d := range deploys {
+			out = append(out, deployJSON(d, names[d.RepoID]))
+		}
+
+		return ui.PrintJSON(out)
+	}
+
+	if len(deploys) == 0 {
+		if slug != "" {
+			ui.Warn(slug + " has never been deployed from this server — deploy it with `rec-deploy deploy " + slug + "`")
+
+			return nil
+		}
+
+		ui.Warn("no deploy has run on this server yet — deploy one with `rec-deploy deploy <owner/repo>`")
+
+		return nil
+	}
+
+	rows := make([][2]string, 0, len(deploys))
+	for _, d := range deploys {
+		rows = append(rows, deployRow(d, names[d.RepoID]))
+	}
+
+	ui.Title(plural(len(deploys), "deploy"))
+	ui.Out(ui.TwoCol(rows))
+	ui.Info("`rec-deploy logs <owner/repo> --path <path>` shows what each command of a checkout's last deploy printed")
+
+	return nil
+}
+
+// deployRow renders one deploy of the history: when it ran, against what it did.
+func deployRow(d store.Deploy, repository string) [2]string {
+	flags := []string{d.Status}
+	if repository != "" {
+		flags = append(flags, repository)
+	}
+	if d.SHA != "" {
+		flags = append(flags, shortSHA(d.SHA))
+	}
+	if branch := strings.TrimPrefix(d.Ref, "refs/heads/"); branch != "" {
+		flags = append(flags, branch)
+	}
+	if subject := subject(d.Message); subject != "" {
+		flags = append(flags, subject)
+	}
+	if d.Author != "" {
+		flags = append(flags, d.Author)
+	}
+
+	return [2]string{d.StartedAt.Format(time.DateTime), strings.Join(flags, "  ")}
+}
+
+// deployJSON renders one deploy for --json. A running deploy has no finish time,
+// and an unfinished timestamp is left out rather than printed as a zero date.
+func deployJSON(d store.Deploy, repository string) map[string]any {
+	out := map[string]any{
+		"id":         d.ID,
+		"repository": repository,
+		"status":     d.Status,
+		"ref":        d.Ref,
+		"sha":        d.SHA,
+		"message":    d.Message,
+		"author":     d.Author,
+		"started_at": d.StartedAt,
+	}
+	if !d.FinishedAt.IsZero() {
+		out["finished_at"] = d.FinishedAt
+	}
+
+	return out
+}
+
+// pathLog prints the last deploy of one checkout, command by command: the exit
+// code, the duration and the captured output of every step. The summary says a
+// deploy failed; this says which command failed and what it printed.
+func pathLog(ctx context.Context, slug, path string) error {
+	st, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	if slug != "" {
+		if _, err := registeredRepo(ctx, st, slug); err != nil {
+			return err
+		}
+	}
+
+	deploys, err := st.Deploys(ctx, slug, pathLogSearch)
+	if err != nil {
+		return err
+	}
+
+	names, err := repoNames(ctx, st)
+	if err != nil {
+		return err
+	}
+
+	// Deploys come back newest first, so the first one that touched the path is
+	// its last deploy.
+	for _, d := range deploys {
+		paths, err := st.DeployPaths(ctx, d.ID)
+		if err != nil {
+			return err
+		}
+
+		if p, ok := findPath(paths, path); ok {
+			return renderPathLog(d, p, names[d.RepoID])
+		}
+	}
+
+	return fmt.Errorf("no deploy of %s is recorded — `rec-deploy logs` lists the deploys this server ran", path)
+}
+
+// pathLogSearch is how far back `logs --path` looks for the last deploy that
+// touched the path. A checkout is deployed by every push to its repository, so
+// its last run is within the recent history — but a path skipped for being on
+// another branch is still recorded, and the search must reach past those.
+const pathLogSearch = 100
+
+// renderPathLog prints one checkout's result of one deploy, command by command.
+func renderPathLog(d store.Deploy, p store.DeployPath, repository string) error {
+	cmds := parseCommands(p.Commands)
+
+	if flagJSON {
+		return ui.PrintJSON(map[string]any{
+			"repository":   repository,
+			"path":         p.Path,
+			"user":         p.User,
+			"ran_as_root":  p.RanAsRoot,
+			"status":       p.Status,
+			"reason":       p.Reason,
+			"previous_sha": p.PreviousSHA,
+			"new_sha":      p.NewSHA,
+			"started_at":   d.StartedAt,
+			"commands":     cmds,
+		})
+	}
+
+	ui.Title(p.Path)
+	ui.KeyValue("repository", repository)
+	ui.KeyValue("when", d.StartedAt.Format(time.DateTime))
+	ui.KeyValue("status", p.Status)
+	ui.KeyValue("user", strings.Join(userFlags(p), "  "))
+	if p.NewSHA != "" {
+		ui.KeyValue("commit", shortSHA(p.PreviousSHA)+" → "+shortSHA(p.NewSHA))
+	}
+	if p.Reason != "" {
+		ui.KeyValue("reason", p.Reason)
+	}
+
+	if len(cmds) == 0 {
+		ui.Out("")
+		ui.Info("this deploy ran no command on this path")
+
+		return nil
+	}
+
+	for _, c := range cmds {
+		ui.Out("")
+		renderCommand(c)
+	}
+
+	return nil
+}
+
+// userFlags renders the identity the commands ran as, flagging a root-owned
+// target: push access to that repository is root on this server.
+func userFlags(p store.DeployPath) []string {
+	flags := []string{p.User}
+	if p.RanAsRoot {
+		flags = append(flags, "⚠ root")
+	}
+
+	return flags
+}
+
+// renderCommand prints one pipeline step: the command, how it ended, and the
+// output tail the engine captured.
+func renderCommand(c deploy.CommandResult) {
+	head := "$ " + c.Command + "  " + ui.Dim(fmt.Sprintf("exit %d in %s", c.ExitCode, c.Duration.Round(time.Millisecond)))
+	if c.TimedOut {
+		head += "  " + ui.Dim("(timed out)")
+	}
+
+	if c.ExitCode == 0 && !c.TimedOut {
+		ui.Success(head)
+	} else {
+		ui.Warn(head)
+	}
+
+	for _, line := range strings.Split(strings.TrimRight(c.Output, "\n"), "\n") {
+		if line != "" {
+			ui.Out("    " + ui.Dim(line))
+		}
+	}
+}
+
+// parseCommands reads the per-command results out of the JSON column the engine
+// wrote them to. A column an older or crashed run left unreadable yields no
+// commands rather than an error: the deploy's status and reason are still worth
+// printing.
+func parseCommands(s string) []deploy.CommandResult {
+	var cmds []deploy.CommandResult
+	if err := json.Unmarshal([]byte(s), &cmds); err != nil {
+		return nil
+	}
+
+	return cmds
+}
+
+// findPath returns the result recorded for path within one deploy.
+func findPath(paths []store.DeployPath, path string) (store.DeployPath, bool) {
+	for _, p := range paths {
+		if p.Path == path {
+			return p, true
+		}
+	}
+
+	return store.DeployPath{}, false
+}
+
+// repoNames maps repository row IDs to slugs: a deploy row carries the ID, and
+// the history is read by name.
+func repoNames(ctx context.Context, st *store.Store) (map[int64]string, error) {
+	repos, err := st.Repos(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make(map[int64]string, len(repos))
+	for _, r := range repos {
+		names[r.ID] = r.Repository
+	}
+
+	return names, nil
+}
+
+// subject trims a commit message to its first line, capped, so one deploy stays
+// one row.
+func subject(message string) string {
+	line, _, _ := strings.Cut(message, "\n")
+
+	if r := []rune(line); len(r) > 60 {
+		return string(r[:59]) + "…"
+	}
+
+	return line
+}
