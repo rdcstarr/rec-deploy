@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -100,6 +101,58 @@ func TestPickerStatsRequiresExactAltChord(t *testing.T) {
 	}
 	if footer := fresh.help(); !strings.Contains(footer, "⌥R reveal") {
 		t.Errorf("footer does not render Option chord: %q", footer)
+	}
+}
+
+// TestPickerScrollsToKeepTheCursorVisible pins that a list longer than the
+// terminal shows a window that follows the cursor: the first option leaves the
+// view once the cursor has moved past the bottom edge, and the option under the
+// cursor is always rendered.
+func TestPickerScrollsToKeepTheCursorVisible(t *testing.T) {
+	SetColor(false)
+
+	options := make([]Option, 30)
+	for i := range options {
+		options[i] = Option{Label: "option-" + strconv.Itoa(i), Value: strconv.Itoa(i)}
+	}
+
+	var m tea.Model = pickerModel{Picker: Picker{Title: "list", Options: options}}
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
+
+	for i := 0; i < 20; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+
+	view := m.(pickerModel).View()
+	if !strings.Contains(view, "option-20") {
+		t.Errorf("the option under the cursor is not rendered:\n%s", view)
+	}
+	if strings.Contains(view, "option-0\n") {
+		t.Errorf("the list did not scroll — option-0 is still shown:\n%s", view)
+	}
+	if !strings.Contains(view, "21/30") {
+		t.Errorf("the footer does not show the position in a scrolled list:\n%s", view)
+	}
+}
+
+// TestPickerShowsEverythingWhenItFits pins that a list shorter than the
+// terminal, and a model that has never received a size, render unchanged.
+func TestPickerShowsEverythingWhenItFits(t *testing.T) {
+	SetColor(false)
+
+	options := []Option{{Label: "a", Value: "a"}, {Label: "b", Value: "b"}}
+
+	var sized tea.Model = pickerModel{Picker: Picker{Options: options}}
+	sized, _ = sized.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+
+	for _, m := range []tea.Model{sized, pickerModel{Picker: Picker{Options: options}}} {
+		view := m.(pickerModel).View()
+		if !strings.Contains(view, "a") || !strings.Contains(view, "b") {
+			t.Errorf("a list that fits lost an option:\n%s", view)
+		}
+		if strings.Contains(view, "1/2") {
+			t.Errorf("a list that fits shows a scroll position:\n%s", view)
+		}
 	}
 }
 

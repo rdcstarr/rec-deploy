@@ -80,6 +80,12 @@ func Good(s string) string {
 	return render(StyleSuccess, s)
 }
 
+// Alert returns s in the warning palette color, honoring --no-color. It is the
+// string form of Warn, for composing a block rather than printing a line.
+func Alert(s string) string {
+	return render(StyleWarn, s)
+}
+
 // Accent returns s in the highlight palette color, honoring --no-color.
 func Accent(s string) string {
 	return render(StyleHighlight, s)

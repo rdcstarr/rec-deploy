@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -94,6 +95,8 @@ type pickerModel struct {
 	quitting        bool
 	quit            bool
 	width           int
+	height          int
+	top             int
 }
 
 // Init implements tea.Model.
@@ -106,7 +109,9 @@ func (m pickerModel) Init() tea.Cmd { return nil }
 func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
 		m.width = size.Width
-		return m, nil
+		m.height = size.Height
+
+		return m.scrollIntoView(), nil
 	}
 	if timeout, ok := msg.(statsTimeoutMsg); ok {
 		if timeout.generation == m.statsGeneration {
@@ -186,7 +191,82 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showHelp = !m.showHelp
 	}
 
-	return m, nil
+	return m.scrollIntoView(), nil
+}
+
+// scrollIntoView moves the window the least amount that brings the cursor back
+// inside it, so a list only scrolls once the cursor reaches an edge rather than
+// re-centring on every keystroke.
+func (m pickerModel) scrollIntoView() pickerModel {
+	rows := m.listRows()
+	if rows <= 0 || rows >= len(m.Options) {
+		m.top = 0
+
+		return m
+	}
+
+	if m.cursor < m.top {
+		m.top = m.cursor
+	}
+	if m.cursor >= m.top+rows {
+		m.top = m.cursor - rows + 1
+	}
+	if last := len(m.Options) - rows; m.top > last {
+		m.top = last
+	}
+	if m.top < 0 {
+		m.top = 0
+	}
+
+	return m
+}
+
+// listRows is how many option rows fit the terminal. Zero means the height is
+// unknown — no WindowSizeMsg has arrived, as in a test — and every option is
+// rendered, which is what the picker did before it could scroll.
+func (m pickerModel) listRows() int {
+	if m.height <= 0 {
+		return 0
+	}
+
+	rows := m.height - m.chromeLines()
+	if rows < 1 {
+		return 1
+	}
+
+	return rows
+}
+
+// chromeLines is how many lines View writes around the option rows: the title,
+// the blank line under it, and the footer with its own blank line — plus the
+// help block whenever it is open.
+func (m pickerModel) chromeLines() int {
+	lines := 4
+	if m.showHelp {
+		lines += strings.Count(m.helpBlock(), "\n")
+	}
+
+	return lines
+}
+
+// visible is the half-open range of options the current window shows.
+func (m pickerModel) visible() (start, end int) {
+	rows := m.listRows()
+	if rows <= 0 || rows >= len(m.Options) {
+		return 0, len(m.Options)
+	}
+
+	return m.top, m.top + rows
+}
+
+// helpBlock is what View appends when help is toggled: the caller's own help
+// when it supplied one, otherwise this picker's keybindings.
+func (m pickerModel) helpBlock() string {
+	if m.Help != "" {
+		return "\n" + m.Help + "\n"
+	}
+
+	return "\n" + HelpPanel("Keys", m.helpRows(), nil)
 }
 
 type statsTimeoutMsg struct {
@@ -209,7 +289,9 @@ func (m pickerModel) View() string {
 	var b strings.Builder
 	b.WriteString(render(StyleTitle, m.Title) + "\n\n")
 
-	for i, o := range m.Options {
+	start, end := m.visible()
+	for i := start; i < end; i++ {
+		o := m.Options[i]
 		marker, label := "  ", o.Label
 		if m.width > 4 {
 			label = ansi.Truncate(label, m.width-4, "…")
@@ -240,11 +322,7 @@ func (m pickerModel) View() string {
 	}
 
 	if m.showHelp {
-		if m.Help != "" {
-			b.WriteString("\n" + m.Help + "\n")
-		} else {
-			b.WriteString("\n" + HelpPanel("Keys", m.helpRows(), nil))
-		}
+		b.WriteString(m.helpBlock())
 	}
 
 	b.WriteString("\n" + render(StyleSubtle, m.help()) + "\n")
@@ -295,6 +373,9 @@ func (m pickerModel) help() string {
 		hints = append(hints, k.Key+" "+k.Help)
 	}
 	hints = append(hints, navigationFooter(navigationMenu), "h help")
+	if start, end := m.visible(); end-start < len(m.Options) {
+		hints = append(hints, fmt.Sprintf("%d/%d", m.cursor+1, len(m.Options)))
+	}
 
 	return strings.Join(hints, " • ")
 }
