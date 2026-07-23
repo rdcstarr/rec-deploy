@@ -105,3 +105,68 @@ func TestDigestFromReleaseBodyRequiresExactAsset(t *testing.T) {
 		t.Fatalf("partial asset matched: %q", got)
 	}
 }
+
+// TestSetDNSContentRepointsInPlace covers taking over a hostname an earlier
+// install published. The record has to be updated where it stands — a delete
+// followed by a create would drop the name out of DNS in between, and would
+// leave nothing to put back if the rest of provisioning then failed.
+func TestSetDNSContentRepointsInPlace(t *testing.T) {
+	var method, path string
+	var body map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "result": map[string]any{"id": "d1"}})
+	}))
+	defer srv.Close()
+
+	c := NewClient("secret")
+	c.base, c.http = srv.URL, srv.Client()
+
+	if err := c.SetDNSContent(context.Background(), "z1", "d1", "mcp.example.com", TunnelTarget("t2")); err != nil {
+		t.Fatalf("SetDNSContent: %v", err)
+	}
+
+	if method != http.MethodPut {
+		t.Errorf("method = %s, want PUT so the record is updated rather than replaced", method)
+	}
+	if path != "/zones/z1/dns_records/d1" {
+		t.Errorf("path = %s, want the existing record's own path", path)
+	}
+	if body["content"] != "t2"+TunnelDomain {
+		t.Errorf("content = %v, want the new tunnel's target", body["content"])
+	}
+	if body["proxied"] != true {
+		t.Errorf("proxied = %v, want the record to stay proxied", body["proxied"])
+	}
+}
+
+// TestTunnelTargetIsWhatCreateDNSWrites keeps the takeover and the create path
+// pointing at the same place: a rollback that restored a differently-shaped
+// target would silently break the endpoint it was meant to save.
+func TestTunnelTargetIsWhatCreateDNSWrites(t *testing.T) {
+	var created string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Content string `json:"content"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		created = body.Content
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "result": map[string]any{"id": "d1"}})
+	}))
+	defer srv.Close()
+
+	c := NewClient("secret")
+	c.base, c.http = srv.URL, srv.Client()
+
+	if _, err := c.CreateDNS(context.Background(), "z1", "mcp.example.com", "t1"); err != nil {
+		t.Fatalf("CreateDNS: %v", err)
+	}
+	if created != TunnelTarget("t1") {
+		t.Errorf("CreateDNS wrote %q but TunnelTarget builds %q", created, TunnelTarget("t1"))
+	}
+}

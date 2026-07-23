@@ -89,9 +89,20 @@ func (c *Client) CreateTunnel(ctx context.Context, accountID, name string, secre
 	return Tunnel{ID: out.Result.ID, Name: out.Result.Name, AccountID: out.Result.AccountTag, Secret: base64.StdEncoding.EncodeToString(secret)}, nil
 }
 
+// TunnelDomain is the suffix every hostname routed through a Cloudflare tunnel
+// resolves to. A CNAME whose content ends in it was created for some tunnel,
+// which is what distinguishes a record an earlier install left behind from one
+// the operator created for something else entirely.
+const TunnelDomain = ".cfargotunnel.com"
+
+// TunnelTarget is the CNAME content that routes a hostname to tunnelID.
+func TunnelTarget(tunnelID string) string {
+	return tunnelID + TunnelDomain
+}
+
 // CreateDNS creates the proxied hostname pointing at tunnel.
 func (c *Client) CreateDNS(ctx context.Context, zoneID, hostname, tunnelID string) (string, error) {
-	body := map[string]any{"type": "CNAME", "name": hostname, "content": tunnelID + ".cfargotunnel.com", "proxied": true}
+	body := map[string]any{"type": "CNAME", "name": hostname, "content": TunnelTarget(tunnelID), "proxied": true}
 	var out envelope[struct {
 		ID string `json:"id"`
 	}]
@@ -99,6 +110,19 @@ func (c *Client) CreateDNS(ctx context.Context, zoneID, hostname, tunnelID strin
 		return "", err
 	}
 	return out.Result.ID, nil
+}
+
+// SetDNSContent repoints an existing proxied CNAME at content. It is how a
+// hostname an earlier install published is taken over without the URL changing
+// under the MCP clients configured with it, and how that same record is put
+// back where it was if the rest of provisioning then fails.
+func (c *Client) SetDNSContent(ctx context.Context, zoneID, recordID, hostname, content string) error {
+	body := map[string]any{"type": "CNAME", "name": hostname, "content": content, "proxied": true}
+	var out envelope[struct {
+		ID string `json:"id"`
+	}]
+
+	return c.do(ctx, http.MethodPut, "/zones/"+url.PathEscape(zoneID)+"/dns_records/"+url.PathEscape(recordID), body, &out)
 }
 
 // FindDNS finds hostname in the longest matching active zone visible to the token.

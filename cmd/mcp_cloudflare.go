@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,16 +84,17 @@ func enableCloudflareMCP(ctx context.Context, report bool) error {
 	tunnelName := defaultTunnelName()
 	var tunnel cloudflare.Tunnel
 	var zone cloudflare.Zone
-	var recordID, hostname string
+	var hostname string
+	var claim dnsClaim
 	var provision *cloudflare.Client
 	rollback := true
 	defer func() {
 		if !rollback {
 			return
 		}
-		if provision != nil && recordID != "" {
-			if err := provision.DeleteDNS(context.Background(), zone.ID, recordID); err != nil {
-				ui.Warn(fmt.Sprintf("rollback could not delete Cloudflare DNS record %s: %v", recordID, err))
+		if provision != nil && claim.RecordID != "" {
+			if err := undoDNSClaim(context.Background(), provision, zone.ID, hostname, claim); err != nil {
+				ui.Warn(fmt.Sprintf("rollback could not restore Cloudflare DNS record %s: %v", claim.RecordID, err))
 			}
 		}
 		if provision != nil && tunnel.ID != "" {
@@ -112,7 +114,7 @@ func enableCloudflareMCP(ctx context.Context, report bool) error {
 	}()
 
 	if method == "token" {
-		provision, zone, tunnel, recordID, hostname, err = provisionWithToken(ctx, tunnelName, listen)
+		provision, zone, tunnel, claim, hostname, err = provisionWithToken(ctx, tunnelName, listen)
 	} else {
 		zone, tunnel, hostname, err = provisionWithBrowser(ctx, bin, tunnelName, listen)
 	}
@@ -152,7 +154,7 @@ func enableCloudflareMCP(ctx context.Context, report bool) error {
 		Hostname:    hostname,
 		TunnelID:    tunnel.ID,
 		TunnelName:  tunnel.Name,
-		DNSRecordID: recordID,
+		DNSRecordID: claim.RecordID,
 	}
 	// Quiet: this write is a checkpoint mid-provisioning, not the outcome. The
 	// outcome is the readiness report at the end of this function.
@@ -361,10 +363,10 @@ func disableCloudflareMCP(ctx context.Context) error {
 	return nil
 }
 
-func provisionWithToken(ctx context.Context, tunnelName, listen string) (*cloudflare.Client, cloudflare.Zone, cloudflare.Tunnel, string, string, error) {
+func provisionWithToken(ctx context.Context, tunnelName, listen string) (*cloudflare.Client, cloudflare.Zone, cloudflare.Tunnel, dnsClaim, string, error) {
 	accountID, err := promptCloudflareAccountID()
 	if err != nil {
-		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, "", "", err
+		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, dnsClaim{}, "", err
 	}
 	// Where to create the token, and with which permissions, belongs in the
 	// prompt that asks for it: the description is erased with the form, while a
@@ -375,28 +377,28 @@ func provisionWithToken(ctx context.Context, tunnelName, listen string) (*cloudf
 			"Stored root-only in config.yaml for cleanup and future tunnel changes. Alt+R reveals or masks it.",
 		Config().MCP.Cloudflare.APIToken)
 	if err != nil {
-		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, "", "", err
+		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, dnsClaim{}, "", err
 	}
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, "", "", fmt.Errorf("cloudflare API token is required")
+		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, dnsClaim{}, "", fmt.Errorf("cloudflare API token is required")
 	}
 	c := cloudflare.NewClient(token)
 	if err := ui.Spinner("Validating Cloudflare account access…", func() error { return c.VerifyAccount(ctx, accountID) }); err != nil {
-		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, "", "", err
+		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, dnsClaim{}, "", err
 	}
 	zones, err := c.Zones(ctx)
 	if err != nil {
-		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, "", "", err
+		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, dnsClaim{}, "", err
 	}
 	zones = zonesForAccount(zones, accountID)
 	if len(zones) == 0 {
-		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, "", "", fmt.Errorf("the Cloudflare token can access no active DNS zones")
+		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, dnsClaim{}, "", fmt.Errorf("the Cloudflare token can access no active DNS zones")
 	}
 	Config().MCP.Cloudflare.AccountID = accountID
 	Config().MCP.Cloudflare.APIToken = token
 	if err := config.Save(flagConfig, Config()); err != nil {
-		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, "", "", err
+		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, dnsClaim{}, "", err
 	}
 	sort.Slice(zones, func(i, j int) bool { return zones[i].Name < zones[j].Name })
 	options := make([]ui.Option, 0, len(zones))
@@ -407,30 +409,23 @@ func provisionWithToken(ctx context.Context, tunnelName, listen string) (*cloudf
 	}
 	selected, err := ui.Select("Select Cloudflare zone", options)
 	if err != nil || selected == "" {
-		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, "", "", err
+		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, dnsClaim{}, "", err
 	}
 	zone := byID[selected]
-	hostname, err := promptMCPHostname(zone.Name)
+	hostname, existing, err := claimMCPHostname(ctx, c, zone)
 	if err != nil {
-		return nil, zone, cloudflare.Tunnel{}, "", "", err
-	}
-	existing, err := c.FindDNS(ctx, hostname)
-	if err != nil {
-		return c, zone, cloudflare.Tunnel{}, "", hostname, err
-	}
-	if existing.ID != "" {
-		return c, zone, cloudflare.Tunnel{}, "", hostname, fmt.Errorf("cloudflare DNS record %s already exists — choose another subdomain", hostname)
+		return c, zone, cloudflare.Tunnel{}, dnsClaim{}, hostname, err
 	}
 	ok, err := confirmMCPSetup(hostname, listen, "stored root-only API token")
 	if err != nil {
-		return nil, zone, cloudflare.Tunnel{}, "", hostname, err
+		return nil, zone, cloudflare.Tunnel{}, dnsClaim{}, hostname, err
 	}
 	if !ok {
-		return nil, zone, cloudflare.Tunnel{}, "", hostname, ui.ErrBack
+		return nil, zone, cloudflare.Tunnel{}, dnsClaim{}, hostname, ui.ErrBack
 	}
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
-		return nil, zone, cloudflare.Tunnel{}, "", "", err
+		return nil, zone, cloudflare.Tunnel{}, dnsClaim{}, "", err
 	}
 	var tunnel cloudflare.Tunnel
 	if err := ui.Spinner("Creating Cloudflare tunnel…", func() error {
@@ -438,14 +433,106 @@ func provisionWithToken(ctx context.Context, tunnelName, listen string) (*cloudf
 		tunnel, e = c.CreateTunnel(ctx, zone.AccountID, tunnelName, secret)
 		return e
 	}); err != nil {
-		return c, zone, tunnel, "", hostname, err
+		return c, zone, tunnel, dnsClaim{}, hostname, err
 	}
-	var recordID string
-	if err := ui.Spinner("Publishing HTTPS hostname…", func() error { var e error; recordID, e = c.CreateDNS(ctx, zone.ID, hostname, tunnel.ID); return e }); err != nil {
+
+	// The claim is built from what actually happened, not from what was
+	// intended: until the record is really repointed there is nothing to undo,
+	// and a rollback that wrote a "previous" value it never replaced would be
+	// guessing.
+	var claim dnsClaim
+	if err := ui.Spinner("Publishing HTTPS hostname…", func() error {
+		if existing.ID == "" {
+			id, e := c.CreateDNS(ctx, zone.ID, hostname, tunnel.ID)
+			if e != nil {
+				return e
+			}
+			claim = dnsClaim{RecordID: id}
+
+			return nil
+		}
+		if e := c.SetDNSContent(ctx, zone.ID, existing.ID, hostname, cloudflare.TunnelTarget(tunnel.ID)); e != nil {
+			return e
+		}
+		claim = dnsClaim{RecordID: existing.ID, PreviousContent: existing.Content}
+
+		return nil
+	}); err != nil {
 		_ = c.DeleteTunnel(ctx, zone.AccountID, tunnel.ID)
-		return c, zone, cloudflare.Tunnel{}, "", hostname, err
+		return c, zone, cloudflare.Tunnel{}, dnsClaim{}, hostname, err
 	}
-	return c, zone, tunnel, recordID, hostname, nil
+
+	return c, zone, tunnel, claim, hostname, nil
+}
+
+// dnsClaim is how provisioning got hold of the hostname's DNS record, and
+// therefore what undoing it means. A record this run created is deleted; one
+// taken over from an earlier install is pointed back at what it was serving, so
+// a reinstall that fails halfway leaves the previous endpoint working rather
+// than dark.
+type dnsClaim struct {
+	RecordID string
+	// PreviousContent is set only for a record taken over from an earlier
+	// install, and holds what it pointed at before.
+	PreviousContent string
+}
+
+// undoDNSClaim returns hostname's DNS record to where provisioning found it.
+func undoDNSClaim(ctx context.Context, c *cloudflare.Client, zoneID, hostname string, claim dnsClaim) error {
+	if claim.PreviousContent == "" {
+		return c.DeleteDNS(ctx, zoneID, claim.RecordID)
+	}
+
+	return c.SetDNSContent(ctx, zoneID, claim.RecordID, hostname, claim.PreviousContent)
+}
+
+// claimMCPHostname settles which hostname this install publishes on, and returns
+// the DNS record already sitting there, if any. A name that is free is used
+// straight away; one that is taken is only used after the operator agrees to
+// replace it, which is how a URL their MCP clients are configured with survives
+// a reinstall. Declining re-asks rather than failing — the collision is a choice
+// to make, not an error to abort setup with.
+func claimMCPHostname(ctx context.Context, c *cloudflare.Client, zone cloudflare.Zone) (string, cloudflare.DNSRecord, error) {
+	for {
+		hostname, err := promptMCPHostname(zone.Name)
+		if err != nil {
+			return "", cloudflare.DNSRecord{}, err
+		}
+
+		var existing cloudflare.DNSRecord
+		if err := ui.Spinner("Checking whether "+hostname+" is free…", func() error {
+			var e error
+			existing, e = c.FindDNS(ctx, hostname)
+
+			return e
+		}); err != nil {
+			return hostname, cloudflare.DNSRecord{}, err
+		}
+		if existing.ID == "" {
+			return hostname, cloudflare.DNSRecord{}, nil
+		}
+
+		replace, err := ui.Confirm("Replace the existing DNS record for "+hostname+"?", describeExistingRecord(hostname, existing.Content))
+		if err != nil {
+			return hostname, cloudflare.DNSRecord{}, err
+		}
+		if replace {
+			return hostname, existing, nil
+		}
+	}
+}
+
+// describeExistingRecord says what is already at hostname, which is the only
+// thing that makes "replace it?" answerable. A record an earlier install of this
+// tool left points at a Cloudflare tunnel and is safe to take over; anything
+// else belongs to the operator, and naming what it points at is how they tell
+// the two apart.
+func describeExistingRecord(hostname, content string) string {
+	if strings.HasSuffix(content, cloudflare.TunnelDomain) {
+		return hostname + " already points at a Cloudflare tunnel (" + content + ") — which is what an earlier rec-deploy install on this server would have left. Replacing it repoints the record at this install's new tunnel, so MCP clients keep the same URL. The old tunnel is left in your Cloudflare account; delete it there if you want it gone."
+	}
+
+	return hostname + " already points at " + content + ", which rec-deploy did not create. Replacing it will break whatever uses that name. Answer no and pick a different subdomain unless you are certain."
 }
 
 func provisionWithBrowser(ctx context.Context, bin, tunnelName, listen string) (cloudflare.Zone, cloudflare.Tunnel, string, error) {
@@ -555,9 +642,28 @@ func zonesForAccount(zones []cloudflare.Zone, accountID string) []cloudflare.Zon
 	return filtered
 }
 
+// randomMCPSubdomain proposes a fresh name for this endpoint. It is random
+// rather than derived from the server's hostname because the derived one is the
+// same on every install of the same box: reinstalling then landed on the
+// hostname the previous install had already published, and the collision had to
+// be resolved in the middle of setup. Typing over it is still how a URL that MCP
+// clients are already configured with gets kept.
+func randomMCPSubdomain() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand does not fail in practice, and a name the operator can
+		// type over beats failing setup over the default value of a field.
+		return "mcp-" + hostnamePart.ReplaceAllString(strings.ToLower(mcpServerHostname()), "-")
+	}
+
+	return "mcp-" + hex.EncodeToString(b)
+}
+
 func promptMCPHostname(zone string) (string, error) {
-	name := "mcp-" + hostnamePart.ReplaceAllString(strings.ToLower(mcpServerHostname()), "-")
-	part, err := ui.Prompt("MCP subdomain", "The public URL will be https://<subdomain>."+zone+"/mcp.", name)
+	part, err := ui.Prompt("MCP subdomain",
+		"The public URL will be https://<subdomain>."+zone+"/mcp.\n"+
+			"A fresh random name is proposed so a reinstall does not collide with the endpoint an earlier one published. Type your previous subdomain instead to keep a URL your MCP clients already use.",
+		randomMCPSubdomain())
 	if err != nil {
 		return "", err
 	}

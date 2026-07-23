@@ -122,3 +122,72 @@ func TestDocumentPreservesPreformattedBody(t *testing.T) {
 		t.Fatalf("document changed its body:\n%s", view)
 	}
 }
+
+// TestRunWizardSurvivesAnOptionalStepFailure is the rule that a failing extra
+// must not abandon setup. A Cloudflare MCP step that could not provision took
+// notifications, auto-update and the summary down with it, and made the wizard
+// exit non-zero — which is what an installer reads to decide whether to enable
+// the daemon at all, so one optional feature failing left the server not
+// running.
+func TestRunWizardSurvivesAnOptionalStepFailure(t *testing.T) {
+	SetColor(false)
+	t.Cleanup(func() { SetColor(true) })
+
+	var order []string
+	out := captureStdout(t, func() {
+		if err := RunWizard(
+			WizardStep{Name: "Required", Run: func() error { order = append(order, "required"); return nil }},
+			WizardStep{Name: "Extra", Optional: true, Run: func() error {
+				order = append(order, "extra")
+
+				return errors.New("dns record already exists")
+			}},
+			WizardStep{Name: "After", Run: func() error { order = append(order, "after"); return nil }},
+		); err != nil {
+			t.Errorf("an optional step's failure ended the wizard: %v", err)
+		}
+	})
+
+	if strings.Join(order, ",") != "required,extra,after" {
+		t.Errorf("steps after the failing extra did not run: %v", order)
+	}
+	if !strings.Contains(out, "dns record already exists") {
+		t.Errorf("the failure was swallowed instead of reported:\n%s", out)
+	}
+}
+
+// TestRunWizardStillStopsForRequiredStepsAndQuits pins the two cases Optional
+// must not swallow: a required step's failure, and a quit from anywhere.
+func TestRunWizardStillStopsForRequiredStepsAndQuits(t *testing.T) {
+	SetColor(false)
+	t.Cleanup(func() { SetColor(true) })
+
+	wantErr := errors.New("no token")
+	var reached bool
+	_ = captureStdout(t, func() {
+		err := RunWizard(
+			WizardStep{Name: "Required", Run: func() error { return wantErr }},
+			WizardStep{Name: "After", Run: func() error { reached = true; return nil }},
+		)
+		if !errors.Is(err, wantErr) {
+			t.Errorf("a required step's failure did not end the wizard: %v", err)
+		}
+	})
+	if reached {
+		t.Error("a step after a failed required step ran")
+	}
+
+	reached = false
+	_ = captureStdout(t, func() {
+		err := RunWizard(
+			WizardStep{Name: "Extra", Optional: true, Run: func() error { return ErrQuit }},
+			WizardStep{Name: "After", Run: func() error { reached = true; return nil }},
+		)
+		if !IsQuit(err) {
+			t.Errorf("a quit from an optional step was swallowed: %v", err)
+		}
+	})
+	if reached {
+		t.Error("a step after a quit ran")
+	}
+}

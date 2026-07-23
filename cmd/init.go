@@ -72,8 +72,13 @@ func initWizard(ctx context.Context) error {
 		// MCP needs the database before its service can start, and belongs before
 		// optional notifications and updates in the operator-facing flow.
 		ui.WizardStep{Name: "State", Run: func() error { return initState(ctx) }},
-		ui.WizardStep{Name: "Remote MCP", Run: func() error { return initMCP(ctx, cfg) }},
-		ui.WizardStep{Name: "Notifications", Run: func() error { return initNotify(ctx) }},
+		// Both are extras: nothing about the daemon or a deploy depends on
+		// either, so neither may take the wizard down with it. A failed MCP
+		// provisioning used to do exactly that — abandoning notifications,
+		// auto-update and the summary, and making init exit non-zero, which is
+		// how install.sh decides whether to enable and start the daemon at all.
+		ui.WizardStep{Name: "Remote MCP", Optional: true, Run: func() error { return initMCP(ctx, cfg) }},
+		ui.WizardStep{Name: "Notifications", Optional: true, Run: func() error { return initNotify(ctx) }},
 		ui.WizardStep{
 			Name: "Auto-update",
 			// A host with no systemd has no timer to enable, so the step is not

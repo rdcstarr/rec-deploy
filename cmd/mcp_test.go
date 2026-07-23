@@ -245,3 +245,46 @@ func TestMCPEndpointUsesConfiguredPublicHost(t *testing.T) {
 		})
 	}
 }
+
+// TestRandomMCPSubdomainDiffersPerCall is why the default changed. It used to be
+// derived from the server's hostname, so it was identical on every install of
+// the same box — reinstalling landed on the endpoint the previous install had
+// published and the collision had to be resolved mid-setup.
+func TestRandomMCPSubdomainDiffersPerCall(t *testing.T) {
+	seen := make(map[string]bool, 16)
+	for i := 0; i < 16; i++ {
+		name := randomMCPSubdomain()
+		if !strings.HasPrefix(name, "mcp-") {
+			t.Fatalf("subdomain %q is not recognisable as an MCP endpoint", name)
+		}
+		if strings.Contains(name, ".") {
+			t.Fatalf("subdomain %q is not a single DNS label", name)
+		}
+		seen[name] = true
+	}
+	if len(seen) != 16 {
+		t.Errorf("only %d of 16 proposed subdomains were distinct", len(seen))
+	}
+}
+
+// TestDescribeExistingRecordTellsOurTunnelFromTheirs is what makes "replace it?"
+// answerable. A record an earlier install left points at a Cloudflare tunnel and
+// is safe to take over; anything else is the operator's own, and replacing it
+// breaks whatever uses that name — so the two must not read alike.
+func TestDescribeExistingRecordTellsOurTunnelFromTheirs(t *testing.T) {
+	ours := describeExistingRecord("mcp-abc.example.com", "a4f1b2c3"+cloudflare.TunnelDomain)
+	if !strings.Contains(ours, "earlier rec-deploy install") || !strings.Contains(ours, "same URL") {
+		t.Errorf("a tunnel record does not read as safe to take over: %q", ours)
+	}
+	if strings.Contains(ours, "will break") {
+		t.Errorf("a tunnel record was described as dangerous to replace: %q", ours)
+	}
+
+	theirs := describeExistingRecord("www.example.com", "some-host.example.net")
+	if !strings.Contains(theirs, "rec-deploy did not create") || !strings.Contains(theirs, "will break") {
+		t.Errorf("a foreign record was not flagged as dangerous to replace: %q", theirs)
+	}
+	if !strings.Contains(theirs, "some-host.example.net") {
+		t.Errorf("a foreign record does not say what it currently points at: %q", theirs)
+	}
+}

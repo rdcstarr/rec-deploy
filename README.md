@@ -124,6 +124,21 @@ The step confirms in one line rather than opening the readiness screen — that
 belongs to `rec-deploy mcp enable`, which was asked for MCP specifically. The
 bearer token is not lost with it: `rec-deploy mcp token` shows it any time.
 
+The subdomain is proposed as a fresh random name (`mcp-3f9a2b7c`), so
+reinstalling never collides with the endpoint a previous install published. To
+keep a URL your MCP clients are already configured with, type that subdomain
+instead — rec-deploy then finds the existing DNS record, tells you what it
+currently points at, and asks before replacing it. Replacing repoints the record
+at this install's new tunnel; the old tunnel is left in your Cloudflare account
+for you to delete. If provisioning fails after that point, the record goes back
+to the tunnel it was serving rather than being deleted.
+
+Remote MCP and notifications are **optional steps**: if one fails, it is reported
+and setup carries on to the steps after it. Only a required step ends the wizard,
+because `init`'s exit status is what `install.sh` reads to decide whether to
+enable and start the daemon — an extra that could not be provisioned must not
+leave the server stopped.
+
 **[6] Notifications** — Telegram and email are offered one at a time as yes/no
 questions, and answering yes drops straight into that channel's settings.
 Credentials are proved against the real service before they are written: the bot
