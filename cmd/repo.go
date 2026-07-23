@@ -891,7 +891,8 @@ func clearDirectoryContents(path string) error {
 // pickRepo resolves which repository a command acts on: args[0] when given, an
 // interactive pick over the registered ones in a terminal, and otherwise no
 // value at all — the caller shows its help. It is the shared resolver `repo
-// show/remove/rotate/install`, `deploy`, `rollback` and `logs` all use.
+// show/remove/rotate/install`, `deploy` and `rollback` all use. `logs` has its
+// own picker: its rows carry each repository's last deploy.
 func pickRepo(ctx context.Context, args []string, title string) (slug string, ok bool, err error) {
 	if len(args) > 0 {
 		return args[0], true, nil

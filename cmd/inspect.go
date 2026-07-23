@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -540,6 +542,10 @@ func newLogsCmd() *cobra.Command {
 			}
 
 			if path == "" {
+				if isInteractive() && !flagJSON {
+					return logsBrowser(cmd.Context(), slug, limit)
+				}
+
 				return listLogs(cmd.Context(), slug, limit)
 			}
 
@@ -702,6 +708,159 @@ func pathLog(ctx context.Context, slug, path string) error {
 	return fmt.Errorf("no deploy of %s is recorded — `rec-deploy logs` lists the deploys this server ran", path)
 }
 
+// logsBrowser is the interactive deploy history: a repository, then its
+// deploys, then the checkouts of one deploy, then what each command of one
+// checkout printed. It replaces a printed list that told the operator which
+// flags to type next.
+func logsBrowser(ctx context.Context, slug string, limit int) error {
+	st, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	if slug == "" {
+		picked, err := pickLogsRepo(ctx, st)
+		if err != nil {
+			return err
+		}
+		slug = picked
+	}
+	if _, err := registeredRepo(ctx, st, slug); err != nil {
+		return err
+	}
+
+	return (ui.Menu{
+		Title:      ui.ScreenPath("rec-deploy", "Logs", slug),
+		SelectHelp: "open deploy",
+		Options:    func() []ui.Option { return logsDeployOptions(ctx, st, slug, limit) },
+		Handle:     func(id string) error { return openDeployLog(ctx, st, id) },
+	}).Run()
+}
+
+// pickLogsRepo chooses which repository's history to browse, annotating each
+// row with when that repository last deployed and how it went — the fact the
+// operator opened logs to find. It is deliberately not pickRepo: annotating
+// there would change the first screen of deploy, rollback and four repo
+// commands too.
+func pickLogsRepo(ctx context.Context, st *store.Store) (string, error) {
+	repos, err := st.Repos(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(repos) == 0 {
+		return "", fmt.Errorf("no repository is registered — run `rec-deploy repo add <owner/repo>`")
+	}
+
+	items := make([]ui.DescribedOption, 0, len(repos))
+	for _, r := range repos {
+		items = append(items, ui.DescribedOption{Name: r.Repository, Description: lastDeploySummary(ctx, st, r.Repository), Value: r.Repository})
+	}
+
+	choice, err := ui.Select(ui.ScreenPath("rec-deploy", "Logs"), ui.DescribedOptions(items...))
+	if err != nil {
+		return "", err // ui.ErrBack (re-show the hub) or ui.ErrQuit (quit)
+	}
+	if choice == "" {
+		return "", ui.ErrBack
+	}
+
+	return choice, nil
+}
+
+// lastDeploySummary describes a repository's most recent deploy in one phrase.
+func lastDeploySummary(ctx context.Context, st *store.Store, repository string) string {
+	deploys, err := st.Deploys(ctx, repository, 1)
+	if err != nil || len(deploys) == 0 {
+		return "never deployed"
+	}
+
+	return deploys[0].StartedAt.Format(time.DateTime) + " · " + deploys[0].Status
+}
+
+// logsDeployOptions lists one repository's deploys, newest first, for the logs
+// browser. The repository is left out of each row: the screen is already
+// scoped to it.
+func logsDeployOptions(ctx context.Context, st *store.Store, slug string, limit int) []ui.Option {
+	deploys, err := st.Deploys(ctx, slug, limit)
+	if err != nil {
+		ui.RenderError(err)
+
+		return nil
+	}
+
+	items := make([]ui.DescribedOption, 0, len(deploys))
+	for _, d := range deploys {
+		row := deployRow(d, "")
+		items = append(items, ui.DescribedOption{Name: row[0], Description: row[1], Value: strconv.FormatInt(d.ID, 10)})
+	}
+
+	return ui.DescribedOptions(items...)
+}
+
+// openDeployLog opens one deploy: straight to the output when it touched a
+// single checkout, through a checkout picker when it touched several.
+func openDeployLog(ctx context.Context, st *store.Store, id string) error {
+	deployID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return err
+	}
+
+	d, err := st.DeployByID(ctx, deployID)
+	if err != nil {
+		return err
+	}
+	paths, err := st.DeployPaths(ctx, deployID)
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		ui.Warn("this deploy recorded no checkout — discovery found none, or it failed before it ran")
+
+		return nil
+	}
+
+	names, err := repoNames(ctx, st)
+	if err != nil {
+		return err
+	}
+	repository := names[d.RepoID]
+
+	if len(paths) == 1 {
+		return showPathLog(d, paths[0], repository)
+	}
+
+	return (ui.Menu{
+		Title:      ui.ScreenPath("rec-deploy", "Logs", repository, d.StartedAt.Format(time.DateTime)),
+		SelectHelp: "open output",
+		Options: func() []ui.Option {
+			items := make([]ui.DescribedOption, 0, len(paths))
+			for _, p := range paths {
+				items = append(items, ui.DescribedOption{Name: p.Path, Description: strings.Join(append([]string{p.Status}, userFlags(p)...), "  "), Value: p.Path})
+			}
+
+			return ui.DescribedOptions(items...)
+		},
+		Handle: func(path string) error {
+			p, ok := findPath(paths, path)
+			if !ok {
+				return nil
+			}
+
+			return showPathLog(d, p, repository)
+		},
+	}).Run()
+}
+
+// showPathLog opens one checkout's output in a scrollable pane. ui.ErrBack from
+// the pane is what returns to the list above it.
+func showPathLog(d store.Deploy, p store.DeployPath, repository string) error {
+	return (ui.Document{
+		Title: ui.ScreenPath("rec-deploy", "Logs", p.Path),
+		Body:  pathLogBody(d, p, repository),
+	}).Run()
+}
+
 // pathLogSearch is how far back `logs --path` looks for the last deploy that
 // touched the path. A checkout is deployed by every push to its repository, so
 // its last run is within the recent history — but a path skipped for being on
@@ -710,8 +869,6 @@ const pathLogSearch = 100
 
 // renderPathLog prints one checkout's result of one deploy, command by command.
 func renderPathLog(d store.Deploy, p store.DeployPath, repository string) error {
-	cmds := parseCommands(p.Commands)
-
 	if flagJSON {
 		return ui.PrintJSON(map[string]any{
 			"repository":   repository,
@@ -723,35 +880,49 @@ func renderPathLog(d store.Deploy, p store.DeployPath, repository string) error 
 			"previous_sha": p.PreviousSHA,
 			"new_sha":      p.NewSHA,
 			"started_at":   d.StartedAt,
-			"commands":     cmds,
+			"commands":     parseCommands(p.Commands),
 		})
 	}
 
-	ui.Title(p.Path)
-	ui.KeyValue("repository", repository)
-	ui.KeyValue("when", d.StartedAt.Format(time.DateTime))
-	ui.KeyValue("status", p.Status)
-	ui.KeyValue("user", strings.Join(userFlags(p), "  "))
+	ui.Out(pathLogBody(d, p, repository))
+
+	return nil
+}
+
+// pathLogBody renders one checkout's result of one deploy: the header, then
+// every command with its exit code, duration and captured output. It builds a
+// string rather than printing so the same rendering serves `logs --path` and
+// the interactive browser's scrollable pane.
+func pathLogBody(d store.Deploy, p store.DeployPath, repository string) string {
+	var b strings.Builder
+
+	b.WriteString(ui.Heading(p.Path) + "\n")
+	rows := [][2]string{
+		{"repository", repository},
+		{"when", d.StartedAt.Format(time.DateTime)},
+		{"status", p.Status},
+		{"user", strings.Join(userFlags(p), "  ")},
+	}
 	if p.NewSHA != "" {
-		ui.KeyValue("commit", shortSHA(p.PreviousSHA)+" → "+shortSHA(p.NewSHA))
+		rows = append(rows, [2]string{"commit", shortSHA(p.PreviousSHA) + " → " + shortSHA(p.NewSHA)})
 	}
 	if p.Reason != "" {
-		ui.KeyValue("reason", p.Reason)
+		rows = append(rows, [2]string{"reason", p.Reason})
 	}
+	b.WriteString(ui.TwoCol(rows))
 
+	cmds := parseCommands(p.Commands)
 	if len(cmds) == 0 {
-		ui.Out("")
-		ui.Info("this deploy ran no command on this path")
+		b.WriteString("\n" + ui.Dim("this deploy ran no command on this path") + "\n")
 
-		return nil
+		return b.String()
 	}
 
 	for _, c := range cmds {
-		ui.Out("")
-		renderCommand(c)
+		b.WriteString("\n" + commandBlock(c))
 	}
 
-	return nil
+	return b.String()
 }
 
 // userFlags renders the identity the commands ran as, flagging a root-owned
@@ -765,34 +936,40 @@ func userFlags(p store.DeployPath) []string {
 	return flags
 }
 
-// renderCommand prints one pipeline step: the command, how it ended, and the
+// commandBlock renders one pipeline step: the command, how it ended, and the
 // output tail the engine captured.
-func renderCommand(c deploy.CommandResult) {
+func commandBlock(c deploy.CommandResult) string {
 	head := "$ " + c.Command + "  " + ui.Dim(fmt.Sprintf("exit %d in %s", c.ExitCode, c.Duration.Round(time.Millisecond)))
 	if c.TimedOut {
 		head += "  " + ui.Dim("(timed out)")
 	}
 
+	var b strings.Builder
 	if c.ExitCode == 0 && !c.TimedOut {
-		ui.Success(head)
+		b.WriteString(ui.Good("✓") + " " + head + "\n")
 	} else {
-		ui.Warn(head)
+		b.WriteString(ui.Alert("!") + " " + head + "\n")
 	}
 
 	for _, line := range strings.Split(strings.TrimRight(c.Output, "\n"), "\n") {
 		if line != "" {
-			ui.Out("    " + ui.Dim(line))
+			b.WriteString("    " + ui.Dim(line) + "\n")
 		}
 	}
+
+	return b.String()
 }
 
 // parseCommands reads the per-command results out of the JSON column the engine
 // wrote them to. A column an older or crashed run left unreadable yields no
-// commands rather than an error: the deploy's status and reason are still worth
-// printing.
+// commands rather than an error — the deploy's status and reason are still worth
+// showing — but it is logged: an empty output pane and a pane that could not be
+// read look identical, and only one of them is a bug.
 func parseCommands(s string) []deploy.CommandResult {
 	var cmds []deploy.CommandResult
 	if err := json.Unmarshal([]byte(s), &cmds); err != nil {
+		slog.Warn("cannot read the recorded command results", "error", err)
+
 		return nil
 	}
 

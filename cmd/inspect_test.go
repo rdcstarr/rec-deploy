@@ -2,16 +2,20 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rdcstarr/rec-deploy/internal/config"
+	"github.com/rdcstarr/rec-deploy/internal/deploy"
 	"github.com/rdcstarr/rec-deploy/internal/discover"
 	"github.com/rdcstarr/rec-deploy/internal/store"
+	"github.com/rdcstarr/rec-deploy/internal/ui"
 	"github.com/rdcstarr/rec-deploy/internal/units"
 )
 
@@ -101,6 +105,61 @@ func TestStatusOverviewPrioritizesProblems(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestPathLogBodyRendersEveryCommand pins that the browser's output pane shows
+// what each command printed — the diagnostic a failed deploy is read with —
+// and that a failing command is not rendered like a passing one.
+func TestPathLogBodyRendersEveryCommand(t *testing.T) {
+	ui.SetColor(false)
+
+	commands := []deploy.CommandResult{
+		{Command: "composer install", ExitCode: 0, Duration: 2 * time.Second, Output: "Nothing to install\n"},
+		{Command: "npm run build", ExitCode: 1, Duration: time.Second, Output: "boom\n"},
+	}
+	raw, err := json.Marshal(commands)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := pathLogBody(
+		store.Deploy{StartedAt: time.Date(2026, 7, 23, 12, 4, 31, 0, time.UTC)},
+		store.DeployPath{Path: "/var/www/api", User: "www-data", Status: store.StatusFailed, Commands: string(raw)},
+		"rdcstarr/rec-tools",
+	)
+
+	for _, want := range []string{"/var/www/api", "rdcstarr/rec-tools", "composer install", "Nothing to install", "npm run build", "boom", "exit 1"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the output pane is missing %q:\n%s", want, body)
+		}
+	}
+}
+
+// TestPathLogBodySaysWhenNothingRan pins that a deploy that ran no command says
+// so, rather than rendering an empty pane the operator has to interpret.
+func TestPathLogBodySaysWhenNothingRan(t *testing.T) {
+	ui.SetColor(false)
+
+	body := pathLogBody(store.Deploy{}, store.DeployPath{Path: "/var/www/api", Commands: "[]"}, "rdcstarr/rec-tools")
+	if !strings.Contains(body, "no command") {
+		t.Errorf("an empty pipeline is not explained:\n%s", body)
+	}
+}
+
+// TestParseCommandsReportsUnreadableColumns pins that a commands column the
+// browser cannot read is logged rather than silently rendered as an empty pane.
+func TestParseCommandsReportsUnreadableColumns(t *testing.T) {
+	var logged strings.Builder
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(restore)
+
+	if got := parseCommands("{not json"); got != nil {
+		t.Errorf("parseCommands returned %+v for an unreadable column", got)
+	}
+	if !strings.Contains(logged.String(), "command results") {
+		t.Errorf("an unreadable commands column was swallowed: %q", logged.String())
 	}
 }
 
