@@ -183,31 +183,48 @@ func enableCloudflareMCP(ctx context.Context, report bool) error {
 		_ = os.Remove(filepath.Join(dir, "cloudflared.yml"))
 	}
 
-	if err := systemd.Reload(ctx); err != nil {
+	// Everything from here on blocks: two systemctl round trips, then polling
+	// that waits up to 10s for the local endpoint and up to 45s for the public
+	// one. All of it used to run with nothing on screen — the spinner from the
+	// last provisioning step had already been cleared — so the longest part of
+	// enabling MCP looked like the program had stopped.
+	if err := ui.Spinner("Starting the MCP service…", func() error {
+		if err := systemd.Reload(ctx); err != nil {
+			return err
+		}
+
+		return systemd.EnableNow(ctx, mcpService)
+	}); err != nil {
 		rollbackLocal()
 		return err
 	}
-	if err := systemd.EnableNow(ctx, mcpService); err != nil {
-		rollbackLocal()
-		return err
-	}
+
 	checkToken := clearToken
 	if checkToken == "" {
 		checkToken, _ = readMCPToken(cfg.MCP.TokenHash)
 	}
-	if err := waitMCPOrigin(ctx, listen, checkToken); err != nil {
+
+	if err := ui.Spinner("Waiting for the local MCP endpoint…", func() error {
+		return waitMCPOrigin(ctx, listen, checkToken)
+	}); err != nil {
 		rollbackLocal()
 		return fmt.Errorf("MCP origin failed to start: %w — inspect `journalctl -u %s`", err, mcpService)
 	}
-	if err := systemd.EnableNow(ctx, mcpTunnelService); err != nil {
+
+	if err := ui.Spinner("Opening the Cloudflare tunnel…", func() error {
+		if err := systemd.EnableNow(ctx, mcpTunnelService); err != nil {
+			return err
+		}
+
+		return systemd.EnableNow(ctx, mcpUpdateTimer)
+	}); err != nil {
 		rollbackLocal()
 		return err
 	}
-	if err := systemd.EnableNow(ctx, mcpUpdateTimer); err != nil {
-		rollbackLocal()
-		return err
-	}
-	if err := waitMCPPublic(ctx, cfg.MCP.PublicURL, checkToken); err != nil {
+
+	if err := ui.Spinner("Verifying the public endpoint…", func() error {
+		return waitMCPPublic(ctx, cfg.MCP.PublicURL, checkToken)
+	}); err != nil {
 		rollbackLocal()
 		return fmt.Errorf("cloudflare tunnel started but public verification failed: %w", err)
 	}

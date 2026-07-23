@@ -71,7 +71,7 @@ func initWizard(ctx context.Context) error {
 		ui.WizardStep{Name: "Discovery", Run: func() error { return initDiscovery(cfg) }},
 		// MCP needs the database before its service can start, and belongs before
 		// optional notifications and updates in the operator-facing flow.
-		ui.WizardStep{Name: "State", Run: func() error { return initState(ctx) }},
+		ui.WizardStep{Name: "Database and host keys", Run: func() error { return initState(ctx) }},
 		// Both are extras: nothing about the daemon or a deploy depends on
 		// either, so neither may take the wizard down with it. A failed MCP
 		// provisioning used to do exactly that — abandoning notifications,
@@ -384,7 +384,9 @@ func initState(ctx context.Context) error {
 		return err
 	}
 
-	ui.Success("state database created and github.com host keys pinned")
+	// The words match the step's heading on purpose: a confirmation that names
+	// something the heading did not is read as a different thing having happened.
+	ui.Success("database created and github.com host keys pinned")
 
 	return nil
 }

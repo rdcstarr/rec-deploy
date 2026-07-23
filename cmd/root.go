@@ -31,6 +31,22 @@ var (
 
 const annotationInteractive = "rec-deploy.io/interactive"
 
+// errCompleted reports that the operator's request was satisfied inside a nested
+// screen, so the command that opened it has nothing left to do and nothing to
+// add. Registering a repository from deploy's empty state is the case: the
+// registration printed the webhook URL, the deploy key and the command to run
+// next, and redrawing the hub over that would bury exactly what the operator is
+// there to read. It is treated the way a completed one-shot command already is —
+// exit to the shell with the output in view.
+var errCompleted = errors.New("rec-deploy: request completed in a nested screen")
+
+// isCleanExit reports whether err ends the run with nothing to report: no error
+// at all, a navigation signal, or work that finished somewhere the command
+// cannot see. Anything else is a real failure and must reach the operator.
+func isCleanExit(err error) bool {
+	return err == nil || ui.IsQuit(err) || errors.Is(err, ui.ErrBack) || errors.Is(err, errCompleted)
+}
+
 // Execute builds the command tree and runs it with the given context. The
 // interactive navigation signals — back (ui.ErrBack) and quit (ui.ErrQuit) — are
 // clean exits, not errors. Backing out of a command launched directly (e.g.
@@ -44,7 +60,7 @@ func Execute(ctx context.Context) error {
 	if errors.Is(err, ui.ErrBack) && isInteractive() {
 		err = rootMenu(root)
 	}
-	if err == nil || ui.IsQuit(err) || errors.Is(err, ui.ErrBack) {
+	if isCleanExit(err) {
 		return nil
 	}
 
@@ -166,6 +182,10 @@ func rootMenu(cmd *cobra.Command) error {
 		switch err := dispatch(cmd, choice); {
 		case ui.IsQuit(err):
 			return err
+		case errors.Is(err, errCompleted):
+			// Work finished in a nested screen — the same as a one-shot command
+			// completing, so leave its output on screen.
+			return nil
 		case errors.Is(err, ui.ErrBack):
 			// Backed out of the command (a group's menu, or a prompt) — re-show
 			// the hub.

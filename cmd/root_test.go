@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/rdcstarr/rec-deploy/internal/config"
+	"github.com/rdcstarr/rec-deploy/internal/ui"
 )
 
 // TestEveryCommandIsReachable is what keeps a hand-written hub from drifting: a
@@ -95,5 +98,26 @@ func TestHubOmitsPlumbingAndTheDaemon(t *testing.T) {
 	}
 	if !seen["deploy"] {
 		t.Error("hub is missing the deploy command")
+	}
+}
+
+// TestIsCleanExitCoversTheCompletionSignal guards the reason errCompleted exists.
+// Registering a repository from deploy's empty state finishes the operator's
+// request in a nested screen, and the command that opened it has nothing left to
+// say. If that signal were not recognised it would surface as a red "error:"
+// line under a successful registration — and, launched directly rather than from
+// the hub, would make rec-deploy exit non-zero after doing exactly what was
+// asked.
+func TestIsCleanExitCoversTheCompletionSignal(t *testing.T) {
+	for _, err := range []error{nil, ui.ErrBack, ui.ErrQuit, errCompleted} {
+		if !isCleanExit(err) {
+			t.Errorf("isCleanExit(%v) = false, want a clean exit", err)
+		}
+	}
+	if isCleanExit(errors.New("github token is not configured")) {
+		t.Error("a real failure was treated as a clean exit and would never reach the operator")
+	}
+	if isCleanExit(fmt.Errorf("wrapping: %w", errCompleted)) != true {
+		t.Error("a wrapped completion signal was not recognised")
 	}
 }

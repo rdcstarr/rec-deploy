@@ -935,13 +935,19 @@ func pickRepo(ctx context.Context, args []string, title string) (slug string, ok
 //
 // In a terminal it offers the registration and runs it; anywhere else it returns
 // the flag-driven hint unchanged, so piped and CI runs keep the error they
-// already parse. Either way it ends in ui.ErrBack, which every menu loop reads
-// as "re-show me" and renders as nothing.
+// already parse.
+//
+// Declining ends in ui.ErrBack, which every menu loop reads as "re-show me" and
+// renders as nothing. Registering ends in errCompleted instead: the registration
+// prints the webhook URL, the deploy key and the command to run next, and
+// redrawing the menu over all of that buries exactly what the operator is there
+// to read.
 //
 // It deliberately does not chain into the caller's own command: a freshly
 // registered repository has no checkout on this server yet, so deploying it
-// would only move the dead end one screen along. repoAdd's own output points at
-// `repo install`, which is the real next step.
+// would fail on zero installations — moving the dead end one screen along
+// rather than removing it. repoAdd's own output points at `repo install`, which
+// is the real next step.
 func offerFirstRepo(ctx context.Context) error {
 	if !isInteractive() {
 		return fmt.Errorf("no repository is registered — run `rec-deploy repo add <owner/repo>`")
@@ -967,7 +973,7 @@ func offerFirstRepo(ctx context.Context) error {
 		return err
 	}
 
-	return ui.ErrBack
+	return errCompleted
 }
 
 // registeredRepo looks slug up, turning "not found" into the actionable error —
