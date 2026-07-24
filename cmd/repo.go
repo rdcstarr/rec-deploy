@@ -65,7 +65,7 @@ func repoMenu(cmd *cobra.Command) error {
 // list — "repo rollback" — that cobra cannot find. Every other choice is a
 // genuine child of repo. Pulling this out of Handle as its own function is
 // what lets a test drive the decision directly, the same way inspect.go's
-// lifecycleOptions does for the status menu.
+// lifecycleOptions does for the service menu.
 func repoDispatchFrom(cmd *cobra.Command, choice string) *cobra.Command {
 	if choice == "rollback" {
 		return cmd.Root()
@@ -754,16 +754,26 @@ func installRepo(ctx context.Context, slug, path string) error {
 			"GIT_SSH_COMMAND=" + sshkey.GitSSHCommand(agent.Socket(), knownHosts),
 		},
 	}
-	if !flagJSON {
-		opts.Stream = os.Stdout
-		ui.Title("cloning " + slug + " into " + path)
-	}
-
 	// Always SSH: the deploy key authenticates over nothing else.
 	command := "git clone " + shellQuote("git@github.com:"+repo.Repository+".git") + " " + shellQuote(path)
 
-	res, err := privexec.Run(ctx, command, opts)
-	if err != nil {
+	// The clone reaches the network and its progress is git's chatter, not a
+	// result, so it spins rather than streaming. That makes its captured output
+	// the only explanation a failure has — privexec's error names the exit code
+	// and the command, never the cause — so the excerpt is folded in here. The
+	// `✓ cloned … as <user>` receipt below says everything the old title did.
+	var res privexec.Result
+	if err := ui.Spinner("Cloning "+slug+"…", func() error {
+		var runErr error
+		res, runErr = privexec.Run(ctx, command, opts)
+		if runErr != nil {
+			if excerpt := res.Excerpt(); excerpt != "" {
+				return fmt.Errorf("%w: %s", runErr, excerpt)
+			}
+		}
+
+		return runErr
+	}); err != nil {
 		return err
 	}
 

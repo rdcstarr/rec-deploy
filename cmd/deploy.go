@@ -231,6 +231,13 @@ func deployOptions(cfg *config.Config, slug, path string) (deploy.Options, error
 		KeysDir:    keysDir,
 		LocksDir:   locksDir,
 		KnownHosts: knownHosts,
+		// The git plumbing spins here and nowhere else: this builder is CLI-only
+		// (deploy, rollback, and repo install's tail call), while the daemon
+		// builds its own options and so gets a nil hook by construction. It is
+		// deliberately outside any --json guard — ui.Spinner writes to stderr, so
+		// stdout stays a pure document, and gating it would leave a --json run
+		// with a genuinely dead pause.
+		Progress: ui.Spinner,
 	}, nil
 }
 
@@ -265,6 +272,8 @@ func report(res deploy.Result, runErr error) error {
 // as, and why it skipped or failed. A root-owned target is flagged here as it is
 // everywhere else — push access to that repository is root on this server.
 func renderResult(res deploy.Result) {
+	failed := false
+
 	for _, pr := range res.Paths {
 		line := strings.TrimRight(pr.Path+"  "+strings.Join(resultFlags(pr), "  "), " ")
 
@@ -275,7 +284,19 @@ func renderResult(res deploy.Result) {
 			ui.Info(line)
 		default:
 			ui.Warn(line)
+			failed = true
 		}
+
+		// A failure's reason now carries git's or the step's own message, which is
+		// far too long to glue onto the flags list. A skip's reason is a short
+		// phrase and stays inline.
+		if pr.Reason != "" && pr.Status != store.StatusSkipped {
+			ui.Out("    " + ui.Dim(pr.Reason))
+		}
+	}
+
+	if failed {
+		ui.Info("`rec-deploy logs` shows the full output of the command that failed")
 	}
 }
 
@@ -301,7 +322,9 @@ func resultFlags(pr deploy.PathResult) []string {
 		flags = append(flags, shortSHA(pr.NewSHA)+" (unchanged)")
 	}
 
-	if pr.Reason != "" {
+	// Only a skip's reason belongs on this line; a failure's is rendered under it
+	// by renderResult, because it carries the failing command's own output.
+	if pr.Reason != "" && pr.Status == store.StatusSkipped {
 		flags = append(flags, pr.Reason)
 	}
 
