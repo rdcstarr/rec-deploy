@@ -36,7 +36,7 @@ func newServeCmd() *cobra.Command {
 		Short: "Run the webhook daemon",
 		Long: "serve receives GitHub push webhooks and deploys every checkout of the pushed repository on this server. " +
 			"It is the process systemd runs (rec-deploy.service) rather than something to start by hand: " +
-			"start, stop and restart it from `rec-deploy status`, and read what it is doing with `journalctl -u rec-deploy -f`.",
+			"start, stop and restart it from `rec-deploy service`, and read what it is doing with `journalctl -u rec-deploy -f`.",
 		Args:        cobra.NoArgs,
 		Annotations: map[string]string{annotationInteractive: "false"},
 		Example:     "rec-deploy serve\nrec-deploy serve --listen 127.0.0.1:9000",

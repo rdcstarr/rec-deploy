@@ -100,20 +100,12 @@ func newStatusCmd() *cobra.Command {
 		Long:    "status probes the webhook daemon, lists the registered repositories, and shows the last deploy recorded for every checkout.",
 		Args:    cobra.NoArgs,
 		Example: "rec-deploy status\nrec-deploy status --json",
+		// The report is the whole answer. It used to be followed by an "Actions"
+		// menu, which asked "what next?" about a question already answered and
+		// left the operator a level deeper than the shell they started from.
+		// scan and the daemon lifecycle live in the hub and in `service` now.
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := showStatus(cmd.Context()); err != nil {
-				return err
-			}
-
-			// The report is the whole answer for a script; the actions below it
-			// only make sense to someone who can pick one.
-			if !isInteractive() || flagJSON {
-				return nil
-			}
-
-			ui.Out("")
-
-			return statusMenu(cmd)
+			return showStatus(cmd.Context())
 		},
 	}
 }
@@ -405,127 +397,6 @@ func daemonUp(ctx context.Context, url string) bool {
 	defer func() { _ = resp.Body.Close() }()
 
 	return resp.StatusCode == http.StatusOK
-}
-
-// daemonLifecycle is the state statusMenuOptions offers actions for: whether
-// systemd manages the daemon at all, and if it does, whether the daemon is
-// running. Splitting this out of statusMenuOptions lets the invariant — never
-// offer both start and stop — be tested by passing a state directly, instead
-// of only through the real systemd.Available() a dev box without systemd
-// always resolves the same way.
-type daemonLifecycle int
-
-const (
-	daemonUnmanaged daemonLifecycle = iota // no systemd on this host: nothing to offer
-	daemonActive                           // systemd manages it and it is running
-	daemonInactive                         // systemd manages it and it is not running
-)
-
-// currentDaemonLifecycle reads daemonLifecycle off the host.
-func currentDaemonLifecycle(ctx context.Context) daemonLifecycle {
-	if !systemd.Available() {
-		return daemonUnmanaged
-	}
-	if systemd.IsActive(ctx, daemonUnit) {
-		return daemonActive
-	}
-
-	return daemonInactive
-}
-
-// lifecycleOptions is the pure half of statusMenuOptions: given the daemon's
-// state, decide which service actions apply. A running daemon has nothing to
-// start; a stopped one has nothing to stop or restart.
-func lifecycleOptions(state daemonLifecycle) []ui.DescribedOption {
-	switch state {
-	case daemonActive:
-		return []ui.DescribedOption{
-			{Name: "restart", Description: "restart the webhook daemon", Value: "restart"},
-			{Name: "stop", Description: "stop the webhook daemon until it is started again", Value: "stop"},
-		}
-	case daemonInactive:
-		return []ui.DescribedOption{
-			{Name: "start", Description: "start the webhook daemon", Value: "start"},
-		}
-	default:
-		return nil
-	}
-}
-
-// statusMenuOptions are the actions the status screen offers below its report:
-// discovery, and the service lifecycle. Only the transition that applies is
-// offered — a running daemon has nothing to start.
-func statusMenuOptions(ctx context.Context) []ui.Option {
-	items := append([]ui.DescribedOption{
-		{Name: "scan", Description: "show every checkout discovery finds", Value: "scan"},
-	}, lifecycleOptions(currentDaemonLifecycle(ctx))...)
-
-	return append(ui.DescribedOptions(items...), ui.Option{Label: "Back", Value: "back"})
-}
-
-// statusMenu runs the action menu under the printed status report. Bubble Tea
-// renders inline, so the report stays on screen above it — the same way the
-// banner stays above the hub.
-func statusMenu(cmd *cobra.Command) error {
-	return (ui.Menu{
-		Title:      "Actions",
-		Options:    func() []ui.Option { return statusMenuOptions(cmd.Context()) },
-		Help:       func() string { return commandHelp(cmd) },
-		BackValues: map[string]bool{"back": true},
-		Handle:     func(choice string) error { return runStatusAction(cmd, choice) },
-	}).Run()
-}
-
-// runStatusAction dispatches one status action. scan is a top-level command, so
-// it is dispatched from the root rather than from status.
-func runStatusAction(cmd *cobra.Command, choice string) error {
-	if choice == "scan" {
-		return dispatch(cmd.Root(), "scan")
-	}
-
-	return serviceAction(cmd.Context(), choice)
-}
-
-// serviceAction starts, stops or restarts the webhook daemon. Stopping and
-// restarting interrupt whatever the daemon is doing, so they confirm first.
-func serviceAction(ctx context.Context, action string) error {
-	if action != "start" {
-		ok, err := ui.Confirm("Really "+action+" "+daemonUnit+"?", "A deploy running right now is cut short. Its delivery is already spent, so GitHub will not send it again.")
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return nil
-		}
-	}
-
-	var run func() error
-	var title string
-	switch action {
-	case "start":
-		run, title = func() error { return systemd.Start(ctx, daemonUnit) }, "Starting "+daemonUnit+"…"
-	case "stop":
-		run, title = func() error { return systemd.Stop(ctx, daemonUnit) }, "Stopping "+daemonUnit+"…"
-	case "restart":
-		run, title = func() error { return systemd.Restart(ctx, daemonUnit) }, "Restarting "+daemonUnit+"…"
-	default:
-		return fmt.Errorf("unknown status action %q", action)
-	}
-
-	// Stopping and restarting drain in-flight deploy work before the unit
-	// comes back down or up, so this is plausibly multi-second — a dead pause
-	// between "Yes" and the result without the spinner.
-	if err := ui.Spinner(title, run); err != nil {
-		return err
-	}
-
-	if systemd.IsActive(ctx, daemonUnit) {
-		ui.Success(daemonUnit + " is active")
-	} else {
-		ui.Warn(daemonUnit + " is not running — read why with `journalctl -u " + daemonUnit + " -n 50`")
-	}
-
-	return nil
 }
 
 // newLogsCmd builds `logs [owner/repo]`: the deploy history, and with --path the

@@ -79,7 +79,10 @@ func selfUpdateInteractive(ctx context.Context, current string) error {
 	if !res.Newer {
 		ui.Success("rec-deploy is up to date (" + res.Current + ")")
 
-		return ui.ErrBack
+		// The check ran and printed its answer, so the request is finished:
+		// ui.ErrBack here made `rec-deploy self-update` on a current server
+		// open the banner and the hub instead of returning to the shell.
+		return ui.ErrDone
 	}
 
 	ok, err := ui.Confirm("Install "+res.Latest+"?", "rec-deploy "+res.Current+" → "+res.Latest+". The download is verified against the release checksums; a mismatch aborts the update.")

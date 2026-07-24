@@ -108,7 +108,18 @@ func Reload(ctx context.Context) error {
 
 // run executes a systemctl subcommand, carrying its output into the error —
 // systemctl says exactly what went wrong and the caller must not swallow it.
+//
+// --no-ask-password is not optional here. Every call below mutates a unit, so
+// polkit asks a non-root caller to authenticate — and its tty agent opens
+// /dev/tty directly, bypassing the CombinedOutput capture. The prompt lands on
+// the terminal underneath whatever is drawn there (a spinner erases it every
+// 90ms) and the process blocks on it forever. Unattended it is worse: the
+// self-update timer would hang its unit indefinitely on a question nobody can
+// answer. Refusing immediately turns both into an error the caller can report.
+// A polkit rule that grants the operation without authentication is unaffected:
+// nothing is asked, so nothing is refused.
 func run(ctx context.Context, args ...string) error {
+	args = append([]string{"--no-ask-password"}, args...)
 	out, err := exec.CommandContext(ctx, "systemctl", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("systemctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
