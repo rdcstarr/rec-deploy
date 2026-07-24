@@ -312,14 +312,21 @@ func mcpStatusView(cmd *cobra.Command) error {
 		case res.Key == "t":
 			actionErr = dispatch(cmd.Parent(), "token")
 		case res.Key == "s":
-			actionErr = restartMCPService(cmd.Context(), cfg)
+			if actionErr = restartMCPService(cmd.Context(), cfg); actionErr == nil {
+				actionErr = ui.ErrDone // the restart is the request, and it is done
+			}
 		case res.Key == "r":
 			// The loop re-probes.
 		case !cfg.MCP.Enabled:
 			actionErr = dispatch(cmd.Parent(), "enable")
 		}
 
-		if ui.IsQuit(actionErr) {
+		// ui.ErrDone gets the same exit arm the quit signal has, the way
+		// ui.Menu.Run treats it: an action that finished must unwind to the
+		// shell with its output in view, not be redrawn over by this picker —
+		// and, before RenderError learned to ignore it, be reported as
+		// "error: rec-deploy: request completed" under output that succeeded.
+		if ui.IsQuit(actionErr) || errors.Is(actionErr, ui.ErrDone) {
 			return actionErr
 		}
 		ui.RenderError(actionErr)
@@ -331,8 +338,14 @@ func mcpStatusView(cmd *cobra.Command) error {
 // a terminal.
 func restartMCPService(ctx context.Context, cfg *config.Config) error {
 	ok, err := ui.Confirm("Restart the remote MCP service?", "Clients reconnect. The bearer token does not change.")
-	if err != nil || !ok {
+	if err != nil {
 		return err
+	}
+	if !ok {
+		// Declining is a back-out, not a completed restart: returning nil here
+		// made the two indistinguishable to the caller, which now exits on one
+		// and redraws on the other.
+		return ui.ErrBack
 	}
 
 	restarted := []string{mcpService}
@@ -500,11 +513,18 @@ func mcpTokenMenu(cmd *cobra.Command) error {
 			ui.Warn("the clear token is no longer available — rotate it to provision a new one")
 			continue
 		}
-		if err := (ui.SecretDetail{
+		// The token was what the operator came for, so dismissing the pane ends
+		// the session rather than redrawing this menu over it. ui.SecretDetail
+		// answers Esc with ui.ErrBack, which is the only "dismissed" it has.
+		err = (ui.SecretDetail{
 			Title: ui.ScreenPath("rec-deploy", "MCP", "Access token"),
 			Label: "bearer token",
 			Value: token,
-		}).Run(); err != nil && !errors.Is(err, ui.ErrBack) {
+		}).Run()
+		if errors.Is(err, ui.ErrBack) {
+			return ui.ErrDone
+		}
+		if err != nil {
 			return err
 		}
 	}

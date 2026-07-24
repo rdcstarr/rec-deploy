@@ -75,7 +75,7 @@ func TestNavigationKeyContract(t *testing.T) {
 
 func TestRenderErrorIgnoresNavSignals(t *testing.T) {
 	// The navigation signals are not real errors and must never be rendered.
-	for _, err := range []error{nil, ErrQuit, ErrBack, fmt.Errorf("dispatch: %w", ErrQuit)} {
+	for _, err := range []error{nil, ErrQuit, ErrBack, ErrDone, fmt.Errorf("dispatch: %w", ErrQuit), fmt.Errorf("dispatch: %w", ErrDone)} {
 		if out := captureStderr(t, func() { RenderError(err) }); out != "" {
 			t.Errorf("RenderError(%v) printed %q, want nothing", err, out)
 		}

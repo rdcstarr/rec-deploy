@@ -40,12 +40,15 @@ func isCleanExit(err error) bool {
 }
 
 // Execute builds the command tree and runs it with the given context. The
-// interactive navigation signals — back (ui.ErrBack) and quit (ui.ErrQuit) — are
-// clean exits, not errors. Backing out of a command launched directly (e.g.
-// `rec-deploy repo`, `rec-deploy status`) has no hub above it to climb to, so open the
-// rec-deploy hub here — the same level a back-out lands on when the command was
-// chosen from the hub. ← therefore always climbs toward the hub regardless of
-// entry point.
+// interactive navigation signals — back (ui.ErrBack), quit (ui.ErrQuit) and
+// completion (ui.ErrDone) — are clean exits, not errors. Backing out of a
+// command launched directly (e.g. `rec-deploy repo`, `rec-deploy service`) has
+// no hub above it to climb to, so open the rec-deploy hub here — the same level
+// a back-out lands on when the command was chosen from the hub. ← therefore
+// always climbs toward the hub regardless of entry point. Only a back-out gets
+// that treatment: a command that finished returns ui.ErrDone and exits, so a
+// report never lands the operator a level deeper than the shell they started
+// from.
 func Execute(ctx context.Context) error {
 	root := newRootCmd()
 	err := root.ExecuteContext(ctx)
@@ -117,6 +120,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newRollbackCmd())
 	root.AddCommand(newScanCmd())
 	root.AddCommand(newStatusCmd())
+	root.AddCommand(newServiceCmd())
 	root.AddCommand(newLogsCmd())
 	root.AddCommand(newNotifyCmd())
 	root.AddCommand(newServeCmd())
@@ -204,6 +208,8 @@ var hubEntries = []hubEntry{
 	{"repo", "register, install and administer repositories"},
 	{"logs", "browse the deploy history"},
 	{"status", "daemon, units and discovered checkouts"},
+	{"scan", "show every checkout discovery finds"},
+	{"service", "start, stop or restart the webhook daemon"},
 	{"config", "server, GitHub, discovery and notifications"},
 	{"mcp", "remote read-only access for AI clients"},
 	{"self-update", "check for and install a new release"},

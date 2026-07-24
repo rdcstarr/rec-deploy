@@ -169,6 +169,22 @@ interactive UI. A module is not "done" until it has both.
   text-editing shortcuts and must never be intercepted for navigation.
   A command's **top** menu returns `ui.ErrBack`; a **nested** menu returns `nil`.
   Every menu loop owes `if ui.Quitting() { return ui.ErrQuit }` at the top of the `for`.
+- **Completion leaves the TUI.** Every interactive screen answers one question: *did this
+  fulfil what the operator asked for?* Yes → `ui.ErrDone`; the session unwinds past every
+  menu above it and the operator lands at their shell with the result on screen. No (`Esc`,
+  a declined confirm, an empty pick, a "nothing to show" warning) → `ui.ErrBack`; the
+  nearest menu redraws. A failure returns the real `error`: the nearest menu renders it and
+  redraws, so the operator retries on the screen they were already on.
+  The corollary is the rule: **a menu may exist only before a result, never after one.** A
+  command that has printed its report, rotated a key or restarted a service is finished and
+  must not offer "what next?".
+  `dispatch()` already converts a cleanly-returning leaf command into `ui.ErrDone`, so a
+  Cobra `RunE` still returns `nil` — the rule binds handlers that do the work themselves,
+  inside a `ui.Menu.Handle` or a hand-rolled picker loop, where `nil` means "loop".
+  Exactly two screens may loop after showing something, because there the screen *is* the
+  result: the **logs browser**, whose every level is a chooser and whose output pane is a
+  read-only viewer that erases itself on exit, and the **config section editor**, whose
+  screen is the live list of values being edited. Nothing else earns an exception.
 - **Show progress for blocking work — never a dead pause.** Wrap it with
   `ui.Spinner(title, func() error { … })`. *Exception:* work that streams its own output.
   **A deploy streams.** `rec-deploy deploy` shows command output live; it must not spin.

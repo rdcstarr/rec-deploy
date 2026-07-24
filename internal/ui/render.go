@@ -222,11 +222,14 @@ func Star() string {
 }
 
 // RenderError prints err as a clean, single-line message on stderr. The
-// navigation signals ErrQuit and ErrBack are not real errors and are never
-// rendered, so a menu loop can pass them to RenderError harmlessly: ErrQuit is
-// then caught by the next Quitting() check, ErrBack just unwinds to this loop.
+// navigation signals ErrQuit, ErrBack and ErrDone are not real errors and are
+// never rendered, so a menu loop can pass any of them to RenderError
+// harmlessly: ErrQuit is then caught by the next Quitting() check, ErrBack just
+// unwinds to this loop, and ErrDone is propagated by whichever loop owns the
+// decision to exit. Rendering ErrDone printed "error: rec-deploy: request
+// completed" under output that had in fact succeeded.
 func RenderError(err error) {
-	if err == nil || IsQuit(err) || errors.Is(err, ErrBack) {
+	if err == nil || IsQuit(err) || errors.Is(err, ErrBack) || errors.Is(err, ErrDone) {
 		return
 	}
 

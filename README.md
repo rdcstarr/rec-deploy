@@ -383,6 +383,7 @@ rec-deploy deploy <owner/repo> [--path P]     # deploy now, streaming output liv
 rec-deploy rollback <owner/repo> [--path P]   # back to the previous SHA
 rec-deploy scan                         # what discovery finds, and why
 rec-deploy status                       # daemon health, repos, last deploy per path
+rec-deploy service start|stop|restart   # the systemd unit that runs the daemon
 rec-deploy logs [owner/repo]            # deploy history
 rec-deploy notify test                  # send a test notification and report each channel's outcome
 
@@ -398,19 +399,22 @@ and it opens a menu or prompts; piped or under systemd it falls back to help, a 
 summary, or an error naming the flag. Destructive actions confirm in a TTY and require
 `--yes` otherwise.
 
-Picking a command from a menu runs it and then returns you to the shell with its output in
-view — a deploy, an install, a rotate is a thing you asked for, and redrawing the menu over
-its result would bury exactly what you came to read. Only navigation stays in the TUI:
-backing out of a screen (`Esc` / `←`) returns to the menu above it, and the group hubs
-(`repo`, `config`, `status`, `mcp`) keep their menu open while you move between their own
-entries. Any blocking step — a GitHub API call, a host-key pin, a Cloudflare tunnel coming
+Anything that finishes returns you to the shell with its output in view — a deploy, an
+install, a rotate, a status report is a thing you asked for, and drawing a menu over or
+under its result would bury exactly what you came to read. A menu therefore exists only
+*before* a result, never after one: no screen asks "what next?" about a question it has
+already answered. Only navigation stays in the TUI — backing out of a screen (`Esc` / `←`)
+returns to the menu above it, and the group hubs (`repo`, `config`, `service`, `mcp`) keep
+their menu open while you move between their own entries. Two screens are read-and-return
+by design, because there the screen *is* the result: the `logs` browser and the `config`
+section editor. Any blocking step — a GitHub API call, a host-key pin, a Cloudflare tunnel coming
 up, a test notification — shows a labelled spinner that names what it is waiting for and
 clears when it is done, so a slow network call never looks like a freeze. A deploy is the
 one exception: it streams its commands' output live instead of spinning.
 
 The bare `rec-deploy` hub above is curated, not exhaustive: `deploy`, `repo`, `logs`,
-`status`, `config`, `mcp`, `self-update` and `uninstall`, plus `init` until the setup
-wizard has run to completion. `rollback` and `scan` are reached from the `repo` and `status` menus,
+`status`, `scan`, `service`, `config`, `mcp`, `self-update` and `uninstall`, plus `init`
+until the setup wizard has run to completion. `rollback` is reached from the `repo` menu
 and `notify test` from the Telegram/Email sections of `config` — every command above stays
 fully typable and listed in `--help` whether or not the hub shows it on its first screen.
 
@@ -426,11 +430,11 @@ checkout) which checkout, then read what each command printed in a scrollable pa
 `--path`, `--limit`, `--json` and every non-TTY run are unchanged. `self-update` is one
 checked, verified, fail-closed action, not a menu: it reports current → latest, confirms,
 installs, and offers a supervised restart; `--check` and `--restart` are unchanged.
-`status` now offers to run `scan` and to start, stop or restart the daemon underneath the
-health report it already prints. `serve` is the process those actions — and systemd —
-start; it refuses to run a second time beside a `rec-deploy.service` that is already
-active, so start, stop and restart it from `rec-deploy status` or `systemctl`, never by
-running `serve` by hand.
+`status` prints its health report and ends there; the daemon's lifecycle moved to
+`service`, its own scriptable command group, so a report is never followed by a menu.
+`serve` is the process `service` — and systemd — start; it refuses to run a second time
+beside a `rec-deploy.service` that is already active, so start, stop and restart it from
+`rec-deploy service` or `systemctl`, never by running `serve` by hand.
 
 Global flags: `--config`, `--json`, `--no-color`, `-v/--verbose`, `--yes`.
 
