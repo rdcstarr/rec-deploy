@@ -23,6 +23,15 @@ var ErrQuit = errors.New("rec-deploy: quit interactive session")
 // it as a clean exit, so it harmlessly unwinds to the nearest menu loop.
 var ErrBack = errors.New("rec-deploy: back one level")
 
+// ErrDone signals that a dispatched command ran to completion, so the whole
+// interactive session should unwind to the shell with that command's output in
+// view rather than redraw the menu on top of it. It is the difference between
+// "backed out, show me the menu again" (ErrBack) and "the thing I asked for is
+// done" (ErrDone) — a repo install, a deploy, a rotate finishing should leave
+// the operator at their prompt, not three menus deep. Menu loops propagate it;
+// Execute treats it as a clean exit.
+var ErrDone = errors.New("rec-deploy: request completed")
+
 // IsQuit reports whether err signals a full-session quit (ErrQuit).
 func IsQuit(err error) bool { return errors.Is(err, ErrQuit) }
 

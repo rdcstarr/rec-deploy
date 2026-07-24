@@ -938,7 +938,7 @@ func pickRepo(ctx context.Context, args []string, title string) (slug string, ok
 // already parse.
 //
 // Declining ends in ui.ErrBack, which every menu loop reads as "re-show me" and
-// renders as nothing. Registering ends in errCompleted instead: the registration
+// renders as nothing. Registering ends in ui.ErrDone instead: the registration
 // prints the webhook URL, the deploy key and the command to run next, and
 // redrawing the menu over all of that buries exactly what the operator is there
 // to read.
@@ -973,7 +973,7 @@ func offerFirstRepo(ctx context.Context) error {
 		return err
 	}
 
-	return errCompleted
+	return ui.ErrDone
 }
 
 // registeredRepo looks slug up, turning "not found" into the actionable error —

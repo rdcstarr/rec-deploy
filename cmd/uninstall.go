@@ -144,7 +144,12 @@ func runUninstall(ctx context.Context, keepGitHub, keepCloudflare, keepData bool
 		}
 
 		for _, repo := range repos {
-			switch err := deleteRepoArtifacts(ctx, st, client, repo); {
+			// Two GitHub API calls per repository — show which one is being
+			// cleaned rather than freeze on a long list of them.
+			err := ui.Spinner("Cleaning "+repo.Repository+" on github…", func() error {
+				return deleteRepoArtifacts(ctx, st, client, repo)
+			})
+			switch {
 			case err == nil:
 				cleaned = append(cleaned, repo.Repository)
 				if !flagJSON {

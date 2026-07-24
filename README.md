@@ -398,6 +398,16 @@ and it opens a menu or prompts; piped or under systemd it falls back to help, a 
 summary, or an error naming the flag. Destructive actions confirm in a TTY and require
 `--yes` otherwise.
 
+Picking a command from a menu runs it and then returns you to the shell with its output in
+view — a deploy, an install, a rotate is a thing you asked for, and redrawing the menu over
+its result would bury exactly what you came to read. Only navigation stays in the TUI:
+backing out of a screen (`Esc` / `←`) returns to the menu above it, and the group hubs
+(`repo`, `config`, `status`, `mcp`) keep their menu open while you move between their own
+entries. Any blocking step — a GitHub API call, a host-key pin, a Cloudflare tunnel coming
+up, a test notification — shows a labelled spinner that names what it is waiting for and
+clears when it is done, so a slow network call never looks like a freeze. A deploy is the
+one exception: it streams its commands' output live instead of spinning.
+
 The bare `rec-deploy` hub above is curated, not exhaustive: `deploy`, `repo`, `logs`,
 `status`, `config`, `mcp`, `self-update` and `uninstall`, plus `init` until the setup
 wizard has run to completion. `rollback` and `scan` are reached from the `repo` and `status` menus,

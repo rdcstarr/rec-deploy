@@ -11,6 +11,9 @@ type Menu struct {
 	SelectHelp string
 	BackValues map[string]bool
 	Handle     func(string) error
+	// pick renders one choice. It defaults to the real Picker and exists only
+	// so a test can drive the loop without a terminal.
+	pick func(Picker) (Result, error)
 }
 
 // Run displays the menu until the operator backs out or quits. Child ErrBack
@@ -29,7 +32,11 @@ func (m Menu) Run() error {
 		if m.Options != nil {
 			options = m.Options()
 		}
-		res, err := (Picker{Title: m.Title, Options: options, Help: help, SelectHelp: m.SelectHelp}).Run()
+		pick := m.pick
+		if pick == nil {
+			pick = Picker.Run
+		}
+		res, err := pick(Picker{Title: m.Title, Options: options, Help: help, SelectHelp: m.SelectHelp})
 		if err != nil {
 			return err
 		}
@@ -43,6 +50,11 @@ func (m Menu) Run() error {
 		switch {
 		case IsQuit(err):
 			return err
+		case errors.Is(err, ErrDone):
+			// A dispatched command completed — unwind past this menu and every
+			// one above it, so the operator lands back at the shell with the
+			// command's output in view instead of the menu redrawn over it.
+			return ErrDone
 		case errors.Is(err, ErrBack):
 			continue
 		case err != nil:

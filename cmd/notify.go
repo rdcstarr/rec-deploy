@@ -66,12 +66,23 @@ func newNotifyTestCmd() *cobra.Command {
 // silent.
 func runNotifyTest(ctx context.Context) error {
 	cfg := Config()
-	results := notify.Deliver(ctx, cfg.Notify, notify.Summary{
-		Repository: "rec-deploy",
-		Ref:        "refs/heads/main",
-		Status:     "test",
-		Message:    "Notifications are configured correctly.",
-	})
+
+	// Deliver reaches Telegram and an SMTP server, several seconds in the worst
+	// case, so it shows progress rather than sitting on a dead pause. The spinner
+	// clears before the per-channel results print.
+	var results []notify.ChannelResult
+	if err := ui.Spinner("Sending a test notification…", func() error {
+		results = notify.Deliver(ctx, cfg.Notify, notify.Summary{
+			Repository: "rec-deploy",
+			Ref:        "refs/heads/main",
+			Status:     "test",
+			Message:    "Notifications are configured correctly.",
+		})
+
+		return nil
+	}); err != nil {
+		return err
+	}
 
 	return notifyTestOutcome(results)
 }

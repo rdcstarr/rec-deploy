@@ -191,3 +191,62 @@ func TestRunWizardStillStopsForRequiredStepsAndQuits(t *testing.T) {
 		t.Error("a step after a quit ran")
 	}
 }
+
+// TestMenuPropagatesDoneWithoutRedrawing pins the exit-after-completion rule. A
+// handler that finishes the operator's request returns ErrDone, and the menu
+// must unwind past itself rather than loop — redrawing over a repo install's
+// output was the exact complaint this answers. ErrBack, by contrast, is
+// "re-show me" and keeps looping.
+func TestMenuPropagatesDoneWithoutRedrawing(t *testing.T) {
+	SetColor(false)
+	t.Cleanup(func() { SetColor(true) })
+
+	calls := 0
+	menu := Menu{
+		Title:   "T",
+		Options: func() []Option { return []Option{{Label: "go", Value: "go"}} },
+		Handle: func(string) error {
+			calls++
+
+			return ErrDone
+		},
+		pick: func(Picker) (Result, error) { return Result{Value: "go"}, nil },
+	}
+
+	if err := menu.Run(); !errors.Is(err, ErrDone) {
+		t.Fatalf("menu.Run() = %v, want ErrDone propagated to the caller", err)
+	}
+	if calls != 1 {
+		t.Errorf("handler ran %d times; a completed action must not loop the menu", calls)
+	}
+}
+
+// TestMenuLoopsOnBack is the other half of the distinction: ErrBack means the
+// operator stepped out of a child screen, so the menu redraws and waits again
+// rather than unwinding. The second visit backs out of the menu itself.
+func TestMenuLoopsOnBack(t *testing.T) {
+	SetColor(false)
+	t.Cleanup(func() { SetColor(true) })
+
+	visits := 0
+	menu := Menu{
+		Title:   "T",
+		Options: func() []Option { return []Option{{Label: "go", Value: "go"}} },
+		Handle:  func(string) error { return ErrBack },
+		pick: func(Picker) (Result, error) {
+			visits++
+			if visits == 1 {
+				return Result{Value: "go"}, nil // enter the handler, which backs out
+			}
+
+			return Result{Value: ""}, nil // second time, back out of the menu
+		},
+	}
+
+	if err := menu.Run(); !errors.Is(err, ErrBack) {
+		t.Fatalf("menu.Run() = %v, want ErrBack once the menu itself is exited", err)
+	}
+	if visits != 2 {
+		t.Errorf("menu was shown %d times; ErrBack from a child must redraw it, not exit", visits)
+	}
+}

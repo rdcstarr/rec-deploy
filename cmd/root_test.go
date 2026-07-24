@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/rdcstarr/rec-deploy/internal/config"
 	"github.com/rdcstarr/rec-deploy/internal/ui"
 )
@@ -101,15 +103,14 @@ func TestHubOmitsPlumbingAndTheDaemon(t *testing.T) {
 	}
 }
 
-// TestIsCleanExitCoversTheCompletionSignal guards the reason errCompleted exists.
-// Registering a repository from deploy's empty state finishes the operator's
-// request in a nested screen, and the command that opened it has nothing left to
-// say. If that signal were not recognised it would surface as a red "error:"
-// line under a successful registration — and, launched directly rather than from
-// the hub, would make rec-deploy exit non-zero after doing exactly what was
+// TestIsCleanExitCoversTheCompletionSignal guards the reason ui.ErrDone exists.
+// A command dispatched from a menu that ran to completion finished the
+// operator's request; if that signal were not a clean exit it would surface as a
+// red "error:" line under successful output — and, for a command launched
+// directly, would make rec-deploy exit non-zero after doing exactly what was
 // asked.
 func TestIsCleanExitCoversTheCompletionSignal(t *testing.T) {
-	for _, err := range []error{nil, ui.ErrBack, ui.ErrQuit, errCompleted} {
+	for _, err := range []error{nil, ui.ErrBack, ui.ErrQuit, ui.ErrDone} {
 		if !isCleanExit(err) {
 			t.Errorf("isCleanExit(%v) = false, want a clean exit", err)
 		}
@@ -117,7 +118,38 @@ func TestIsCleanExitCoversTheCompletionSignal(t *testing.T) {
 	if isCleanExit(errors.New("github token is not configured")) {
 		t.Error("a real failure was treated as a clean exit and would never reach the operator")
 	}
-	if isCleanExit(fmt.Errorf("wrapping: %w", errCompleted)) != true {
+	if !isCleanExit(fmt.Errorf("wrapping: %w", ui.ErrDone)) {
 		t.Error("a wrapped completion signal was not recognised")
+	}
+}
+
+// TestDispatchTurnsCompletionIntoErrDone pins the rule behind exiting the TUI
+// after a command finishes. A leaf chosen from a menu that runs cleanly must
+// come back as ui.ErrDone so the menu unwinds to the shell instead of redrawing
+// over the command's output; a real failure must pass through unchanged.
+func TestDispatchTurnsCompletionIntoErrDone(t *testing.T) {
+	root := &cobra.Command{Use: "rec-deploy", SilenceErrors: true, SilenceUsage: true}
+
+	ran := false
+	root.AddCommand(&cobra.Command{
+		Use:  "act",
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error { ran = true; return nil },
+	})
+	boom := errors.New("it broke")
+	root.AddCommand(&cobra.Command{
+		Use:  "fail",
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error { return boom },
+	})
+
+	if err := dispatch(root, "act"); !errors.Is(err, ui.ErrDone) {
+		t.Errorf("dispatch of a clean command = %v, want ui.ErrDone", err)
+	}
+	if !ran {
+		t.Error("dispatch did not actually run the command")
+	}
+	if err := dispatch(root, "fail"); !errors.Is(err, boom) {
+		t.Errorf("dispatch of a failing command = %v, want the real error to reach the operator", err)
 	}
 }

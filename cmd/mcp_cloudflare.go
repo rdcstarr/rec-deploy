@@ -413,12 +413,16 @@ func disableCloudflareMCP(ctx context.Context) error {
 		return err
 	}
 	c := cloudflare.NewClient(strings.TrimSpace(token))
-	if err := c.VerifyAccount(ctx, accountID); err != nil {
+	if err := ui.Spinner("Validating Cloudflare account access…", func() error {
+		return c.VerifyAccount(ctx, accountID)
+	}); err != nil {
 		return err
 	}
 	cf := cfg.MCP.Cloudflare
 	wasActive := stopMCPTunnel(ctx)
-	if err := deleteCloudflareMCP(ctx, c, cf); err != nil {
+	if err := ui.Spinner("Deleting the Cloudflare tunnel and hostname…", func() error {
+		return deleteCloudflareMCP(ctx, c, cf)
+	}); err != nil {
 		// Put the endpoint back the way it was found. Previously only a failure
 		// before the DNS record was deleted restored the connector; restoring it
 		// after leaves a tunnel serving a hostname that is already gone, which

@@ -31,20 +31,12 @@ var (
 
 const annotationInteractive = "rec-deploy.io/interactive"
 
-// errCompleted reports that the operator's request was satisfied inside a nested
-// screen, so the command that opened it has nothing left to do and nothing to
-// add. Registering a repository from deploy's empty state is the case: the
-// registration printed the webhook URL, the deploy key and the command to run
-// next, and redrawing the hub over that would bury exactly what the operator is
-// there to read. It is treated the way a completed one-shot command already is —
-// exit to the shell with the output in view.
-var errCompleted = errors.New("rec-deploy: request completed in a nested screen")
-
 // isCleanExit reports whether err ends the run with nothing to report: no error
-// at all, a navigation signal, or work that finished somewhere the command
-// cannot see. Anything else is a real failure and must reach the operator.
+// at all, or one of the interactive navigation signals. Anything else is a real
+// failure and must reach the operator. ui.ErrDone belongs here — a command that
+// finished its work is the most ordinary clean exit there is.
 func isCleanExit(err error) bool {
-	return err == nil || ui.IsQuit(err) || errors.Is(err, ui.ErrBack) || errors.Is(err, errCompleted)
+	return err == nil || ui.IsQuit(err) || errors.Is(err, ui.ErrBack) || errors.Is(err, ui.ErrDone)
 }
 
 // Execute builds the command tree and runs it with the given context. The
@@ -182,19 +174,15 @@ func rootMenu(cmd *cobra.Command) error {
 		switch err := dispatch(cmd, choice); {
 		case ui.IsQuit(err):
 			return err
-		case errors.Is(err, errCompleted):
-			// Work finished in a nested screen — the same as a one-shot command
-			// completing, so leave its output on screen.
+		case errors.Is(err, ui.ErrDone):
+			// A command ran to completion — exit to the shell with its output in
+			// view instead of redrawing the hub over it.
 			return nil
 		case errors.Is(err, ui.ErrBack):
 			// Backed out of the command (a group's menu, or a prompt) — re-show
 			// the hub.
 		case err != nil:
 			ui.RenderError(err) // real error — re-show the hub so they can retry
-		default:
-			// A one-shot command completed — exit to the shell with its output
-			// in view instead of re-showing the menu.
-			return nil
 		}
 	}
 }
@@ -250,6 +238,12 @@ func hubOptions() []ui.Option {
 // A command that merely *accepts* an argument validates with none and is
 // therefore never prompted here: it asks for what it needs itself, through
 // interactiveArg or pickRepo, so it can offer a picker instead of a blank line.
+//
+// A command that returns cleanly is turned into ui.ErrDone: the operator asked
+// for it from a menu, it did its work and printed its result, and the menu it
+// was chosen from must not redraw over that. A group whose own menu the operator
+// exits returns ui.ErrBack instead (the navigation contract), so a bare nil here
+// only ever means a leaf command completed — never that a menu was left.
 func dispatch(cmd *cobra.Command, name string) error {
 	root := cmd.Root()
 
@@ -276,7 +270,11 @@ func dispatch(cmd *cobra.Command, name string) error {
 
 	root.SetArgs(args)
 
-	return root.ExecuteContext(cmd.Context())
+	if err := root.ExecuteContext(cmd.Context()); err != nil {
+		return err
+	}
+
+	return ui.ErrDone
 }
 
 // interactiveArg resolves the single positional argument a command needs:
