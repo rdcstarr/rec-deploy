@@ -47,8 +47,29 @@ const (
 	OutcomeDeferred Outcome = "left to the package manager"
 )
 
+// Phase is the pass that produced a step. Its values are the labels the report
+// is grouped under, the same way Outcome's values are the words it prints. The
+// engine names the phase because it is the only thing that knows which of its
+// four passes emitted a target: /etc/systemd/system/rec-deploy.service and
+// "daemon-reload" both come out of unitFiles, and nothing about either string
+// says so.
+type Phase string
+
+// The phases of a run, in the order Run performs them.
+const (
+	PhaseServices  Phase = "services"
+	PhaseUnitFiles Phase = "unit files"
+	PhaseData      Phase = "data"
+	PhaseBinary    Phase = "binary"
+)
+
 // Step is one target's fate. Detail carries the error text or the hint.
 type Step struct {
+	// Phase groups the step under the pass that produced it, so a human report
+	// prints as labelled blocks instead of one flat list. It is deliberately not
+	// serialized: --json is a contract automation reads, and how a human report
+	// is grouped must not change its shape.
+	Phase   Phase   `json:"-"`
 	Target  string  `json:"target"`
 	Outcome Outcome `json:"outcome"`
 	Detail  string  `json:"detail,omitempty"`
@@ -120,20 +141,20 @@ func Run(ctx context.Context, opts Options) Report {
 // running daemon in place. State, not location, is the truth.
 func (r *Report) services(ctx context.Context, opts Options) {
 	if !systemdAvailable() {
-		r.Steps = append(r.Steps, Step{Target: "services", Outcome: OutcomeSkipped, Detail: "no systemd on this host"})
+		r.Steps = append(r.Steps, Step{Phase: PhaseServices, Target: "services", Outcome: OutcomeSkipped, Detail: "no systemd on this host"})
 		return
 	}
 
 	for _, unit := range disableUnits {
 		if !unitEnabled(ctx, unit) && !unitActive(ctx, unit) {
-			r.Steps = append(r.Steps, Step{Target: unit, Outcome: OutcomeSkipped, Detail: "not enabled or running"})
+			r.Steps = append(r.Steps, Step{Phase: PhaseServices, Target: unit, Outcome: OutcomeSkipped, Detail: "not enabled or running"})
 			continue
 		}
 		if err := disableNow(ctx, unit); err != nil {
-			r.Steps = append(r.Steps, Step{Target: unit, Outcome: OutcomeFailed, Detail: err.Error()})
+			r.Steps = append(r.Steps, Step{Phase: PhaseServices, Target: unit, Outcome: OutcomeFailed, Detail: err.Error()})
 			continue
 		}
-		r.Steps = append(r.Steps, Step{Target: unit, Outcome: OutcomeRemoved, Detail: "stopped and disabled"})
+		r.Steps = append(r.Steps, Step{Phase: PhaseServices, Target: unit, Outcome: OutcomeRemoved, Detail: "stopped and disabled"})
 	}
 }
 
@@ -155,23 +176,23 @@ func (r *Report) unitFiles(ctx context.Context, opts Options) {
 	for _, unit := range opts.Units {
 		path := filepath.Join(opts.UnitsDir, unit)
 		if owner := packageOwner(ctx, path); owner != "" {
-			r.Steps = append(r.Steps, Step{Target: path, Outcome: OutcomeDeferred, Detail: "owned by " + owner + " — removed by the package manager"})
+			r.Steps = append(r.Steps, Step{Phase: PhaseUnitFiles, Target: path, Outcome: OutcomeDeferred, Detail: "owned by " + owner + " — removed by the package manager"})
 			continue
 		}
 		switch err := os.Remove(path); {
 		case err == nil:
 			removed = true
-			r.Steps = append(r.Steps, Step{Target: path, Outcome: OutcomeRemoved})
+			r.Steps = append(r.Steps, Step{Phase: PhaseUnitFiles, Target: path, Outcome: OutcomeRemoved})
 		case errors.Is(err, os.ErrNotExist):
-			r.Steps = append(r.Steps, Step{Target: path, Outcome: OutcomeSkipped})
+			r.Steps = append(r.Steps, Step{Phase: PhaseUnitFiles, Target: path, Outcome: OutcomeSkipped})
 		default:
-			r.Steps = append(r.Steps, Step{Target: path, Outcome: OutcomeFailed, Detail: err.Error()})
+			r.Steps = append(r.Steps, Step{Phase: PhaseUnitFiles, Target: path, Outcome: OutcomeFailed, Detail: err.Error()})
 		}
 	}
 
 	if removed && systemdAvailable() {
 		if err := reload(ctx); err != nil {
-			r.Steps = append(r.Steps, Step{Target: "daemon-reload", Outcome: OutcomeFailed, Detail: err.Error()})
+			r.Steps = append(r.Steps, Step{Phase: PhaseUnitFiles, Target: "daemon-reload", Outcome: OutcomeFailed, Detail: err.Error()})
 		}
 	}
 }
@@ -181,18 +202,18 @@ func (r *Report) unitFiles(ctx context.Context, opts Options) {
 func (r *Report) data(opts Options) {
 	for _, dir := range opts.DataDirs {
 		if opts.KeepData {
-			r.Steps = append(r.Steps, Step{Target: dir, Outcome: OutcomeKept})
+			r.Steps = append(r.Steps, Step{Phase: PhaseData, Target: dir, Outcome: OutcomeKept})
 			continue
 		}
 		if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-			r.Steps = append(r.Steps, Step{Target: dir, Outcome: OutcomeSkipped})
+			r.Steps = append(r.Steps, Step{Phase: PhaseData, Target: dir, Outcome: OutcomeSkipped})
 			continue
 		}
 		if err := os.RemoveAll(dir); err != nil {
-			r.Steps = append(r.Steps, Step{Target: dir, Outcome: OutcomeFailed, Detail: err.Error()})
+			r.Steps = append(r.Steps, Step{Phase: PhaseData, Target: dir, Outcome: OutcomeFailed, Detail: err.Error()})
 			continue
 		}
-		r.Steps = append(r.Steps, Step{Target: dir, Outcome: OutcomeRemoved})
+		r.Steps = append(r.Steps, Step{Phase: PhaseData, Target: dir, Outcome: OutcomeRemoved})
 	}
 }
 
@@ -201,6 +222,7 @@ func (r *Report) data(opts Options) {
 func (r *Report) binary(opts Options) {
 	if r.Package != "" {
 		r.Steps = append(r.Steps, Step{
+			Phase:   PhaseBinary,
 			Target:  opts.BinaryPath,
 			Outcome: OutcomeDeferred,
 			Detail:  "finish with:  dpkg -r " + r.Package + "  (or `rpm -e`)",
@@ -210,11 +232,11 @@ func (r *Report) binary(opts Options) {
 
 	switch err := os.Remove(opts.BinaryPath); {
 	case err == nil:
-		r.Steps = append(r.Steps, Step{Target: opts.BinaryPath, Outcome: OutcomeRemoved})
+		r.Steps = append(r.Steps, Step{Phase: PhaseBinary, Target: opts.BinaryPath, Outcome: OutcomeRemoved})
 	case errors.Is(err, os.ErrNotExist):
-		r.Steps = append(r.Steps, Step{Target: opts.BinaryPath, Outcome: OutcomeSkipped})
+		r.Steps = append(r.Steps, Step{Phase: PhaseBinary, Target: opts.BinaryPath, Outcome: OutcomeSkipped})
 	default:
-		r.Steps = append(r.Steps, Step{Target: opts.BinaryPath, Outcome: OutcomeFailed, Detail: err.Error()})
+		r.Steps = append(r.Steps, Step{Phase: PhaseBinary, Target: opts.BinaryPath, Outcome: OutcomeFailed, Detail: err.Error()})
 	}
 }
 

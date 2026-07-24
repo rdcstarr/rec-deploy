@@ -69,6 +69,10 @@ func runUninstall(ctx context.Context, keepGitHub, keepCloudflare, keepData bool
 		return err
 	}
 
+	if !flagJSON {
+		ui.Title("rec-deploy uninstall")
+	}
+
 	// Inventory before any question: the operator confirms facts, not vibes.
 	repos, err := registeredRepos(ctx)
 	if err != nil {
@@ -101,7 +105,9 @@ func runUninstall(ctx context.Context, keepGitHub, keepCloudflare, keepData bool
 			return err
 		}
 		if !ok {
-			return nil
+			// Declining the whole uninstall delivered nothing: nil would read to
+			// dispatch as a finished command and unwind past the hub.
+			return ui.ErrBack
 		}
 
 		if !keepGitHub && len(repos) > 0 {
@@ -130,10 +136,20 @@ func runUninstall(ctx context.Context, keepGitHub, keepCloudflare, keepData bool
 		}
 	}
 
+	// The confirms are what decide which phases the run will take, so the
+	// numbering is only final here — the same rule ui.RunWizard's Skip enforces
+	// for init, where numbering a step the operator never reaches would promise
+	// work that does not happen.
+	doGitHub := !keepGitHub && len(repos) > 0
+	doCloudflare := !keepCloudflare && hasCloudflare
+	steps := stepper{total: 1 + boolToInt(doGitHub) + boolToInt(doCloudflare)}
+
 	// Phase 1: GitHub cleanup while the token and the stored IDs still exist.
 	var cleaned, gone []string
 	var failed []string
-	if !keepGitHub && len(repos) > 0 {
+	if doGitHub {
+		steps.next("GitHub")
+
 		client, err := githubClient(ctx)
 		if err != nil {
 			return fmt.Errorf("github cleanup needs the configured token: %w — re-run with `--keep-github` to skip it", err)
@@ -175,7 +191,9 @@ func runUninstall(ctx context.Context, keepGitHub, keepCloudflare, keepData bool
 	// nobody can name is a tunnel nobody deletes.
 	cloudflareRemoved := false
 	var cloudflareErr error
-	if !keepCloudflare && hasCloudflare {
+	if doCloudflare {
+		steps.next("Remote MCP")
+
 		cloudflareErr = removeCloudflareMCP(ctx)
 		switch {
 		case cloudflareErr == nil:
@@ -183,6 +201,13 @@ func runUninstall(ctx context.Context, keepGitHub, keepCloudflare, keepData bool
 			if !flagJSON {
 				ui.Success("deleted the Cloudflare tunnel and hostname")
 			}
+		case ui.IsQuit(cloudflareErr):
+			// Ctrl+C at the credentials prompt is the operator leaving, not a
+			// cleanup failure. Recording it as one printed "cloudflare cleanup
+			// failed: rec-deploy: quit interactive session" and then — with the
+			// data kept, so the gate never fires — removed the whole install
+			// anyway, which a numbered step would now make read as sanctioned.
+			return cloudflareErr
 		case !flagJSON:
 			ui.Warn("cloudflare cleanup failed: " + cloudflareErr.Error())
 		}
@@ -195,23 +220,38 @@ func runUninstall(ctx context.Context, keepGitHub, keepCloudflare, keepData bool
 		if !isInteractive() {
 			return fmt.Errorf("remote cleanup failed for %d resources — fix connectivity and re-run, or re-run with `--keep-github` / `--keep-cloudflare`", orphans)
 		}
+		// Everything but yes means no here — Esc and Ctrl+C included. There is no
+		// level to back out to once the remote phases have run, and both signals
+		// are clean exits: returning them ended a half-uninstalled server at
+		// status 0 with nothing said about the orphans, while answering "no" to
+		// the very same question exited 1. This is a deliberate exception to the
+		// global navigation contract, at the one prompt that runs after
+		// destruction has already started.
 		ok, err := ui.Confirm(fmt.Sprintf("Remote cleanup failed for %d resources — delete the local data anyway?", orphans),
 			"They would stay orphaned on GitHub or in Cloudflare with nothing left here to remove them.")
-		if err != nil {
-			return err
-		}
-		if !ok {
+		if err != nil || !ok {
 			return errors.New("uninstall stopped — nothing local was removed")
 		}
 	}
 
 	// Phase 2: the local system.
-	rep := uninstall.Run(ctx, uninstall.Options{
-		UnitsDir:   "/etc/systemd/system",
-		Units:      unitFiles,
-		DataDirs:   []string{confDir, stateDir, "/usr/local/lib/rec-deploy"},
-		BinaryPath: bin,
-		KeepData:   keepData,
+	steps.next("Local system")
+
+	// Run reports rather than returns: it never aborts midway, so a half-removed
+	// install stays finishable by a second run. It shells out to systemctl up to
+	// fifteen times and rec-deploy.service drains in-flight deploys before it
+	// stops, so a heading followed by a blank screen is not an option.
+	var rep uninstall.Report
+	_ = ui.Spinner("Stopping the services and removing the files…", func() error {
+		rep = uninstall.Run(ctx, uninstall.Options{
+			UnitsDir:   "/etc/systemd/system",
+			Units:      unitFiles,
+			DataDirs:   []string{confDir, stateDir, "/usr/local/lib/rec-deploy"},
+			BinaryPath: bin,
+			KeepData:   keepData,
+		})
+
+		return nil
 	})
 
 	if flagJSON {
@@ -222,17 +262,8 @@ func runUninstall(ctx context.Context, keepGitHub, keepCloudflare, keepData bool
 		})
 	}
 
-	for _, s := range rep.Steps {
-		line := s.Target + ": " + string(s.Outcome)
-		if s.Detail != "" {
-			line += " — " + s.Detail
-		}
-		switch s.Outcome {
-		case uninstall.OutcomeFailed:
-			ui.Warn(line)
-		default:
-			ui.Info(line)
-		}
+	for _, line := range reportLines(rep) {
+		ui.Out(line)
 	}
 
 	if rep.Package != "" {
@@ -243,9 +274,64 @@ func runUninstall(ctx context.Context, keepGitHub, keepCloudflare, keepData bool
 		return errors.New("uninstall finished with failures — see the lines above; a re-run finishes what is left")
 	}
 
+	ui.Out("")
 	ui.Success("rec-deploy removed — the deployed checkouts on disk are untouched")
 
 	return nil
+}
+
+// stepper prints the "[n/total] Name" headings ui.RunWizard prints for init.
+// uninstall renders them itself rather than running a wizard, for two reasons:
+// ui.Step writes to stdout unconditionally, and under --json stdout carries
+// exactly one JSON document; and the orphan gate has to sit between two steps
+// rather than inside one, while a wizard prints a step's heading before its
+// body — so a gate that aborted there would announce a phase that never ran.
+type stepper struct {
+	n     int
+	total int
+}
+
+// next announces the step about to run.
+func (s *stepper) next(name string) {
+	s.n++
+	if !flagJSON {
+		ui.Step(s.n, s.total, name)
+	}
+}
+
+// reportLines renders the engine's report the way the local step prints it:
+// each phase introduced by its own label, then that phase's targets verbatim
+// and in engine order, indented under it.
+//
+// Nothing is summarised — on a destructive run "7 unit files removed" hides
+// which targets were actually touched, and package ownership is asked per file,
+// so the seven are not uniform anyway. Nothing is dropped either: a step whose
+// phase the engine did not name still prints, because a report that omits what
+// it did is the defect this command exists not to be.
+func reportLines(rep uninstall.Report) []string {
+	lines := make([]string, 0, len(rep.Steps)+4)
+	phase := uninstall.Phase("")
+	for _, s := range rep.Steps {
+		if s.Phase != phase {
+			phase = s.Phase
+			lines = append(lines, ui.Dim("  "+string(phase)))
+		}
+
+		line := s.Target + ": " + string(s.Outcome)
+		if s.Detail != "" {
+			line += " — " + s.Detail
+		}
+		if s.Outcome == uninstall.OutcomeFailed {
+			// The marker and its space take two of the four columns, so a
+			// failure keeps its "!" without stepping right of the lines above it.
+			lines = append(lines, ui.Alert("!")+"   "+line)
+
+			continue
+		}
+		lines = append(lines, ui.Dim("    "+line))
+	}
+
+	return lines
 }
 
 // removeCloudflareMCP deletes the tunnel and the hostname behind remote MCP. It
@@ -259,9 +345,11 @@ func removeCloudflareMCP(ctx context.Context) error {
 		return err
 	}
 
-	_ = stopMCPTunnel(ctx)
-
+	// Stopping the connector is part of the delete and blocks while cloudflared
+	// drains, so it runs inside the spinner rather than as a dead pause before it.
 	return ui.Spinner("Deleting the Cloudflare tunnel and hostname…", func() error {
+		_ = stopMCPTunnel(ctx)
+
 		return deleteCloudflareMCP(ctx, client, cf)
 	})
 }

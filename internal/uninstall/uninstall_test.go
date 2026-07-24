@@ -2,9 +2,11 @@ package uninstall
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -329,5 +331,71 @@ func TestRunNoSystemd(t *testing.T) {
 	}
 	if len(*calls) != 0 {
 		t.Errorf("systemd was called on a host without systemd: %v", *calls)
+	}
+}
+
+// TestEveryStepCarriesItsPhase is what keeps the report's grouping honest. A
+// Step literal that forgets its Phase renders under a blank label on a real
+// server and nowhere in any test that only reads Target and Outcome — so the
+// field is checked here, where a forgotten one is a failure rather than a
+// cosmetic surprise during an uninstall nobody re-runs.
+func TestEveryStepCarriesItsPhase(t *testing.T) {
+	opts, _ := scaffold(t)
+
+	r := Run(context.Background(), opts)
+	if len(r.Steps) == 0 {
+		t.Fatal("Run recorded no steps")
+	}
+
+	for _, s := range r.Steps {
+		if s.Phase == "" {
+			t.Errorf("step %q has no phase", s.Target)
+		}
+	}
+}
+
+// TestPhasesAppearInRunOrderAndOnlyOnce pins the property reportLines depends
+// on: a phase's steps are contiguous, so one label introduces all of them. If
+// Run ever interleaved its passes, the report would repeat a label instead of
+// grouping — noisier than the flat list the grouping replaced.
+func TestPhasesAppearInRunOrderAndOnlyOnce(t *testing.T) {
+	opts, _ := scaffold(t)
+
+	var order []Phase
+	for _, s := range Run(context.Background(), opts).Steps {
+		if len(order) == 0 || order[len(order)-1] != s.Phase {
+			order = append(order, s.Phase)
+		}
+	}
+
+	want := []Phase{PhaseServices, PhaseUnitFiles, PhaseData, PhaseBinary}
+	if len(order) != len(want) {
+		t.Fatalf("phase runs = %v, want %v — a repeated phase means the passes interleaved", order, want)
+	}
+	for i, w := range want {
+		if order[i] != w {
+			t.Errorf("phase run %d = %q, want %q", i, order[i], w)
+		}
+	}
+}
+
+// TestPhaseIsNotSerialized pins that grouping a human report did not change the
+// document automation reads. --json is a contract; how the terminal lays the
+// same facts out is not part of it.
+func TestPhaseIsNotSerialized(t *testing.T) {
+	opts, _ := scaffold(t)
+
+	out, err := json.Marshal(Run(context.Background(), opts))
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+
+	if strings.Contains(string(out), "phase") {
+		t.Errorf("--json carries the phase: %s", out)
+	}
+	for _, want := range []string{`"target"`, `"outcome"`, `"package"`} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("--json lost %s: %s", want, out)
+		}
 	}
 }
