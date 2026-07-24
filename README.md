@@ -250,6 +250,14 @@ whether to delete the local data (token, HMAC secrets, deploy keys, state
 database). Non-interactively it requires `--yes`, with `--keep-github`,
 `--keep-cloudflare` and `--keep-data` for the same choices.
 
+The removal then runs as numbered steps, the same way `init` does — `[1/3] GitHub`,
+`[2/3] Remote MCP`, `[3/3] Local system`. A phase the run will not take is not a step at
+all: on a server with no repositories registered and no Cloudflare tunnel, or with
+`--keep-github --keep-cloudflare`, it runs one step and is numbered accordingly. The local
+step lists every target it touched, grouped under services, unit files, data and binary —
+nothing is summarised away, because on a destructive command that list is the only record
+of what was removed.
+
 Both remote cleanups run first, while the credentials and the stored IDs still
 exist; if either fails, uninstall stops before destroying the data they live in,
 because a tunnel or a webhook nobody can name is one nobody deletes. An endpoint
