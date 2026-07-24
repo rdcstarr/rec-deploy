@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rdcstarr/rec-deploy/internal/deploy"
 	"github.com/rdcstarr/rec-deploy/internal/store"
 )
 
@@ -232,5 +233,31 @@ func mustInsert(t *testing.T, st *store.Store, p store.DeployPath) {
 
 	if err := st.DeployPathInsert(context.Background(), p); err != nil {
 		t.Fatalf("DeployPathInsert %s: %v", p.Path, err)
+	}
+}
+
+// TestResultFlagsKeepsAFailureReasonOffTheSummaryLine pins the split renderResult
+// depends on. A failure's reason now carries the failing command's own output —
+// up to privexec.ExcerptRunes characters — and gluing that onto the flags list
+// would smear the one-line-per-checkout layout. A skip's reason is a short
+// phrase and belongs inline.
+func TestResultFlagsKeepsAFailureReasonOffTheSummaryLine(t *testing.T) {
+	reason := "command failed with exit 128: git fetch --all --prune: git@github.com: Permission denied (publickey)."
+
+	failed := strings.Join(resultFlags(deploy.PathResult{
+		Path: "/srv/site", User: "admin", Status: store.StatusFailed, Reason: reason,
+	}), "  ")
+	if strings.Contains(failed, reason) {
+		t.Errorf("resultFlags of a failure = %q, want the reason rendered on its own line instead", failed)
+	}
+	if !strings.Contains(failed, store.StatusFailed) {
+		t.Errorf("resultFlags of a failure = %q, want the status", failed)
+	}
+
+	skipped := strings.Join(resultFlags(deploy.PathResult{
+		Path: "/srv/site", User: "admin", Status: store.StatusSkipped, Reason: "checkout is on develop, push was to main",
+	}), "  ")
+	if !strings.Contains(skipped, "checkout is on develop") {
+		t.Errorf("resultFlags of a skip = %q, want the reason inline", skipped)
 	}
 }

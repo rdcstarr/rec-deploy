@@ -233,3 +233,27 @@ func TestRunDropsPrivileges(t *testing.T) {
 		t.Errorf("`id -G` = %v, want exactly %v", have, want)
 	}
 }
+
+// TestResultExcerptFlattensToOneBoundedLine pins what makes a captured tail safe
+// to fold into an error: every surface that renders a failure reason — a deploy
+// summary row, a Telegram card, an email row — renders it on one line, and the
+// tail it is cut from can be 8 KiB of build output.
+func TestResultExcerptFlattensToOneBoundedLine(t *testing.T) {
+	got := Result{Output: "git@github.com: Permission denied (publickey).\nfatal: Could not read\n\nfrom remote repository.\n"}.Excerpt()
+	want := "git@github.com: Permission denied (publickey). fatal: Could not read from remote repository."
+	if got != want {
+		t.Errorf("Excerpt() = %q, want %q", got, want)
+	}
+
+	long := Result{Output: strings.Repeat("a", ExcerptRunes*2)}.Excerpt()
+	if runes := []rune(long); len(runes) != ExcerptRunes {
+		t.Errorf("Excerpt() of an over-long output is %d runes, want %d", len(runes), ExcerptRunes)
+	}
+	if !strings.HasSuffix(long, "…") {
+		t.Errorf("Excerpt() = %q, want a truncation marker", long)
+	}
+
+	if got := (Result{}).Excerpt(); got != "" {
+		t.Errorf("Excerpt() of no output = %q, want empty so nothing is appended to the error", got)
+	}
+}

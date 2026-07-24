@@ -336,7 +336,8 @@ func TestUseSSHRemoteRewritesAnHTTPSOrigin(t *testing.T) {
 	git(t, dir, "init", "--initial-branch=main", dir)
 	git(t, dir, "remote", "add", "origin", "https://github.com/rdcstarr/tema.git")
 
-	if err := useSSHRemote(context.Background(), "rdcstarr/tema", privexec.Options{Dir: dir}); err != nil {
+	// The zero Options also pins that a nil Progress hook runs the step directly.
+	if err := useSSHRemote(context.Background(), Options{}, "rdcstarr/tema", privexec.Options{Dir: dir}); err != nil {
 		t.Fatalf("useSSHRemote: %v", err)
 	}
 
@@ -635,5 +636,236 @@ func TestRollbackSkipsACheckoutAlreadyAtItsTarget(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("post_deploy re-ran on a checkout already at its rollback target")
+	}
+}
+
+// TestRunStreamsThePipelineButNotTheGitPlumbing is the rule this package now
+// owes the CLI: a deploy streams what the manifest ran and stays silent about
+// the git that moved the tree. The fixture is deliberately behind and dirty —
+// a second upstream commit plus an untracked file — so fetch, reset and clean
+// all have something to say, and the assertions are not vacuous.
+func TestRunStreamsThePipelineButNotTheGitPlumbing(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo pipeline-marker\n")
+	dir := checkout(t, bare, "o/r")
+
+	work := clone(t, bare)
+	if err := os.WriteFile(filepath.Join(work, "second"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+	git(t, work, "add", ".")
+	git(t, work, "commit", "-m", "second")
+	git(t, work, "push", "origin", "main")
+
+	if err := os.WriteFile(filepath.Join(dir, "untracked"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write untracked: %v", err)
+	}
+
+	var sink strings.Builder
+	o := opts(t, dir, "o/r", "refs/heads/main")
+	o.Stream = &sink
+
+	res, err := Run(context.Background(), o)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	streamed := sink.String()
+	if !strings.Contains(streamed, "pipeline-marker") {
+		t.Errorf("the pipeline did not stream; got %q", streamed)
+	}
+	// git's own chatter from rev-parse, fetch, reset and clean respectively.
+	for _, noise := range []string{res.Paths[0].NewSHA, " -> origin/", "HEAD is now at", "Removing "} {
+		if strings.Contains(streamed, noise) {
+			t.Errorf("git plumbing leaked %q into the stream: %q", noise, streamed)
+		}
+	}
+}
+
+// TestRunCarriesAFailedGitStepsOutputIntoTheReason is the guard on the reason
+// the plumbing may be silenced at all. Removing the bare repo kills what the
+// checkout's insteadOf rewrite points at while leaving its origin intact, so
+// discovery still finds the installation and the failure lands inside sync.
+// Before the output was folded into the error, Reason was "command failed with
+// exit 128: git fetch --all --prune" and the cause existed nowhere.
+func TestRunCarriesAFailedGitStepsOutputIntoTheReason(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo deployed > marker\n")
+	dir := checkout(t, bare, "o/r")
+
+	if err := os.RemoveAll(bare); err != nil {
+		t.Fatalf("remove origin: %v", err)
+	}
+
+	res, err := Run(context.Background(), opts(t, dir, "o/r", "refs/heads/main"))
+	if err == nil {
+		t.Fatal("Run of a checkout whose origin is gone returned no error")
+	}
+	if len(res.Paths) != 1 || res.Paths[0].Status != "failed" {
+		t.Fatalf("Paths = %+v, want one failed path", res.Paths)
+	}
+
+	reason := res.Paths[0].Reason
+	if !strings.Contains(reason, "does not appear to be a git repository") {
+		t.Errorf("Reason = %q, want git's own diagnosis", reason)
+	}
+	// Reason is rendered on one line — a summary row, a Telegram card, an email.
+	if strings.Contains(reason, "\n") {
+		t.Errorf("Reason = %q, want a single line", reason)
+	}
+}
+
+// TestRunRecordsTheFailedGitStep pins the other half of that diagnostic: the
+// full output the excerpt was cut from stays retrievable through `rec-deploy
+// logs`, and only the failing step is recorded — a successful deploy's Commands
+// must stay the pipeline alone.
+func TestRunRecordsTheFailedGitStep(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo deployed > marker\n")
+	dir := checkout(t, bare, "o/r")
+
+	if err := os.RemoveAll(bare); err != nil {
+		t.Fatalf("remove origin: %v", err)
+	}
+
+	res, _ := Run(context.Background(), opts(t, dir, "o/r", "refs/heads/main"))
+	if len(res.Paths) != 1 || len(res.Paths[0].Commands) != 1 {
+		t.Fatalf("Commands = %+v, want exactly the git step that failed", res.Paths)
+	}
+
+	cmd := res.Paths[0].Commands[0]
+	if cmd.Command != "git fetch --all --prune" {
+		t.Errorf("Command = %q, want the failing git step", cmd.Command)
+	}
+	if cmd.ExitCode == 0 {
+		t.Errorf("ExitCode = %d, want a failure", cmd.ExitCode)
+	}
+	if !strings.Contains(cmd.Output, "Could not read from remote repository") {
+		t.Errorf("Output = %q, want the full git error", cmd.Output)
+	}
+}
+
+// TestRunReportsEveryGitStepThroughProgress pins the gateway itself: every git
+// command announces itself, no manifest step does, and the hook is what runs
+// the work — a hook that swallowed the action would still deploy nothing.
+func TestRunReportsEveryGitStepThroughProgress(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo deployed > marker\n")
+	dir := checkout(t, bare, "o/r")
+
+	var titles []string
+	o := opts(t, dir, "o/r", "refs/heads/main")
+	o.Progress = func(title string, action func() error) error {
+		titles = append(titles, title)
+
+		return action()
+	}
+
+	res, err := Run(context.Background(), o)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Paths[0].PreviousSHA == "" || res.Paths[0].NewSHA == "" {
+		t.Fatalf("Paths[0] = %+v, want the deploy to have run through the hook", res.Paths[0])
+	}
+
+	var fetched bool
+	for _, title := range titles {
+		if title == "" {
+			t.Error("a git step announced itself with an empty title")
+		}
+		if strings.Contains(title, "echo deployed") {
+			t.Errorf("a manifest step went through Progress: %q", title)
+		}
+		if title == "Fetching origin…" {
+			fetched = true
+		}
+	}
+	if !fetched {
+		t.Errorf("titles = %v, want the fetch among them", titles)
+	}
+}
+
+// TestRunWithoutProgressStillSyncsTheTree is what a no-panic test would miss: a
+// step helper that returned nil instead of calling its action would leave the
+// tree untouched and still look fine.
+func TestRunWithoutProgressStillSyncsTheTree(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo deployed > marker\n")
+	dir := checkout(t, bare, "o/r")
+
+	work := clone(t, bare)
+	if err := os.WriteFile(filepath.Join(work, "second"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+	git(t, work, "add", ".")
+	git(t, work, "commit", "-m", "second")
+	git(t, work, "push", "origin", "main")
+
+	o := opts(t, dir, "o/r", "refs/heads/main") // Progress is nil — the daemon's shape
+	res, err := Run(context.Background(), o)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Paths[0].NewSHA == res.Paths[0].PreviousSHA {
+		t.Errorf("Paths[0] = %+v, want the tree moved to the new commit", res.Paths[0])
+	}
+}
+
+// TestRunReturnsTheProgressHooksErrorUnchanged pins that the hook's error is the
+// step's error: ui.Spinner returns Ctrl+C and its own failures that way, and
+// swallowing one would report a deploy that never touched the tree as a success.
+func TestRunReturnsTheProgressHooksErrorUnchanged(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo deployed > marker\n")
+	dir := checkout(t, bare, "o/r")
+	before := git(t, dir, "rev-parse", "HEAD")
+
+	o := opts(t, dir, "o/r", "refs/heads/main")
+	o.Progress = func(string, func() error) error {
+		return os.ErrPermission // never calls action
+	}
+
+	res, err := Run(context.Background(), o)
+	if err == nil {
+		t.Fatal("Run returned no error when every git step was refused")
+	}
+	if len(res.Paths) != 1 || res.Paths[0].Status != "failed" {
+		t.Fatalf("Paths = %+v, want one failed path", res.Paths)
+	}
+	if !strings.Contains(res.Paths[0].Reason, os.ErrPermission.Error()) {
+		t.Errorf("Reason = %q, want the hook's own error", res.Paths[0].Reason)
+	}
+	if after := git(t, dir, "rev-parse", "HEAD"); after != before {
+		t.Errorf("HEAD moved to %s despite the refused step", after)
+	}
+}
+
+// TestRollbackDoesNotStreamTheGitPlumbing covers resetTo, which is a different
+// code path from sync and which `rec-deploy rollback` streams too.
+func TestRollbackDoesNotStreamTheGitPlumbing(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo pipeline-marker\n")
+	dir := checkout(t, bare, "o/r")
+	first := git(t, dir, "rev-parse", "HEAD")
+
+	work := clone(t, bare)
+	if err := os.WriteFile(filepath.Join(work, "second"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+	git(t, work, "add", ".")
+	git(t, work, "commit", "-m", "second")
+	git(t, work, "push", "origin", "main")
+	git(t, dir, "fetch", "origin")
+	git(t, dir, "reset", "--hard", "origin/main")
+
+	var sink strings.Builder
+	o := opts(t, dir, "o/r", "")
+	o.Stream = &sink
+	o.RollbackSHAs = map[string]string{dir: first}
+
+	if _, err := Rollback(context.Background(), o); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	streamed := sink.String()
+	if !strings.Contains(streamed, "pipeline-marker") {
+		t.Errorf("the rollback's pipeline did not stream; got %q", streamed)
+	}
+	if strings.Contains(streamed, "HEAD is now at") {
+		t.Errorf("the rollback's reset leaked into the stream: %q", streamed)
 	}
 }

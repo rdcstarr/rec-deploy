@@ -187,7 +187,15 @@ interactive UI. A module is not "done" until it has both.
   screen is the live list of values being edited. Nothing else earns an exception.
 - **Show progress for blocking work — never a dead pause.** Wrap it with
   `ui.Spinner(title, func() error { … })`. *Exception:* work that streams its own output.
-  **A deploy streams.** `rec-deploy deploy` shows command output live; it must not spin.
+  **A deploy's pipeline streams; its git plumbing spins.** `rec-deploy deploy` shows
+  `post_deploy` output live and must never spin over it. The git around it — `fetch`,
+  `reset`, `clean`, `clone`, `rev-parse` — runs with its output suppressed under a
+  spinner, because that chatter is machinery, not a result. The engine takes the spinner
+  as a plain func value on `deploy.Options` (`Progress func(title string, action func()
+  error) error`, nil in the daemon), so `internal/deploy` never imports `internal/ui`.
+  **A suppressed command owes its output to its error** — fold
+  `privexec.Result.Excerpt()` in, or silence becomes a deploy that fails with an exit
+  code and no reason.
 - **Destructive actions** confirm with `ui.Confirm` in a TTY and require `--yes`
   otherwise, erroring with the literal re-run hint.
 - **`--json` is a global persistent flag.** Commands branch early:

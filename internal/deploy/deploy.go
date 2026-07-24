@@ -53,18 +53,45 @@ type Options struct {
 	Roots, Prune []string
 	// KeysDir, LocksDir and KnownHosts are rec-deploy's state paths.
 	KeysDir, LocksDir, KnownHosts string
-	// Stream, when non-nil, receives command output live. `rec-deploy deploy`
-	// streams; it must never spin on a dead pause.
+	// Stream, when non-nil, receives the post_deploy pipeline's output live.
+	// `rec-deploy deploy` streams the pipeline; it must never spin over it. Git
+	// plumbing never reaches this writer — that runs under Progress instead.
 	Stream io.Writer
+	// Progress, when non-nil, wraps each git plumbing step with a description
+	// while it blocks. The signature is ui.Spinner's, so the CLI assigns it
+	// directly and the daemon leaves it nil, which runs the step inline — that is
+	// what keeps this package free of internal/ui.
+	Progress func(title string, action func() error) error
 }
 
-// CommandResult is one post_deploy step's outcome.
+// step runs action under o.Progress, or directly when there is none.
+func (o Options) step(title string, action func() error) error {
+	if o.Progress == nil {
+		return action()
+	}
+
+	return o.Progress(title, action)
+}
+
+// CommandResult is one command's outcome: every post_deploy step, and the git
+// plumbing step that failed the path.
 type CommandResult struct {
 	Command  string        `json:"command"`
 	ExitCode int           `json:"exit_code"`
 	Duration time.Duration `json:"duration"`
 	Output   string        `json:"output"`
 	TimedOut bool          `json:"timed_out"`
+}
+
+// commandResult records one privexec outcome.
+func commandResult(res privexec.Result) CommandResult {
+	return CommandResult{
+		Command:  res.Command,
+		ExitCode: res.ExitCode,
+		Duration: res.Duration,
+		Output:   res.Output,
+		TimedOut: res.TimedOut,
+	}
 }
 
 // PathResult is one installation's outcome.
@@ -242,17 +269,17 @@ func deployPath(ctx context.Context, in discover.Installation, opts Options) Pat
 	defer cleanup()
 
 	// The rollback point, recorded before anything moves.
-	if pr.PreviousSHA, err = headSHA(ctx, exec); err != nil {
+	if pr.PreviousSHA, err = headSHA(ctx, opts, &pr, exec); err != nil {
 		pr.Status, pr.Reason = store.StatusFailed, err.Error()
 		return pr
 	}
 
-	if err := sync(ctx, in.Branch, exec); err != nil {
+	if err := sync(ctx, opts, &pr, in.Branch, exec); err != nil {
 		pr.Status, pr.Reason = store.StatusFailed, err.Error()
 		return pr
 	}
 
-	if pr.NewSHA, err = headSHA(ctx, exec); err != nil {
+	if pr.NewSHA, err = headSHA(ctx, opts, &pr, exec); err != nil {
 		pr.Status, pr.Reason = store.StatusFailed, err.Error()
 		return pr
 	}
@@ -292,7 +319,7 @@ func deployPath(ctx context.Context, in discover.Installation, opts Options) Pat
 	rbCtx, cancelRollback := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
 	defer cancelRollback()
 
-	if err := rollbackTo(rbCtx, pr.PreviousSHA, exec, &pr); err != nil {
+	if err := rollbackTo(rbCtx, opts, pr.PreviousSHA, exec, &pr); err != nil {
 		pr.Status = store.StatusFailed
 		pr.Reason = stepErr.Error() + "; rollback failed: " + err.Error()
 
@@ -335,7 +362,7 @@ func rollbackPath(ctx context.Context, in discover.Installation, opts Options) P
 	}
 	defer cleanup()
 
-	if pr.PreviousSHA, err = headSHA(ctx, exec); err != nil {
+	if pr.PreviousSHA, err = headSHA(ctx, opts, &pr, exec); err != nil {
 		pr.Status, pr.Reason = store.StatusFailed, err.Error()
 		return pr
 	}
@@ -354,7 +381,7 @@ func rollbackPath(ctx context.Context, in discover.Installation, opts Options) P
 		return pr
 	}
 
-	if err := rollbackTo(ctx, sha, exec, &pr); err != nil {
+	if err := rollbackTo(ctx, opts, sha, exec, &pr); err != nil {
 		pr.Status, pr.Reason = store.StatusFailed, err.Error()
 		return pr
 	}
@@ -436,7 +463,7 @@ func prepare(ctx context.Context, in discover.Installation, opts Options) (prive
 		// one it would turn a working public checkout into an SSH fetch that can
 		// never succeed.
 		if in.RemoteHTTPS {
-			if err := useSSHRemote(ctx, opts.Repository, exec); err != nil {
+			if err := useSSHRemote(ctx, opts, opts.Repository, exec); err != nil {
 				cleanup()
 				return privexec.Options{}, nil, err
 			}
@@ -469,13 +496,7 @@ func runPipeline(ctx context.Context, steps []manifest.Step, exec privexec.Optio
 		o.Timeout = s.Timeout
 
 		res, err := privexec.Run(ctx, s.Run, o)
-		pr.Commands = append(pr.Commands, CommandResult{
-			Command:  res.Command,
-			ExitCode: res.ExitCode,
-			Duration: res.Duration,
-			Output:   res.Output,
-			TimedOut: res.TimedOut,
-		})
+		pr.Commands = append(pr.Commands, commandResult(res))
 
 		if err != nil && !s.ContinueOnFailure {
 			return err
@@ -487,8 +508,12 @@ func runPipeline(ctx context.Context, steps []manifest.Step, exec privexec.Optio
 
 // rollbackTo resets the tree to sha and re-runs the manifest that tree carries —
 // the previous manifest, since the manifest versions with the code.
-func rollbackTo(ctx context.Context, sha string, exec privexec.Options, pr *PathResult) error {
-	if err := resetTo(ctx, sha, exec); err != nil {
+// The spinner goes inside resetTo, not around this whole function: the reset
+// must be silent but the manifest it re-runs must stream, and wrapping both
+// would either hide that pipeline's output or let the spinner's redraw on
+// stderr clobber it on stdout.
+func rollbackTo(ctx context.Context, opts Options, sha string, exec privexec.Options, pr *PathResult) error {
+	if err := resetTo(ctx, opts, pr, sha, exec); err != nil {
 		return err
 	}
 	pr.NewSHA = sha

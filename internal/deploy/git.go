@@ -9,9 +9,48 @@ import (
 	"github.com/rdcstarr/rec-deploy/internal/privexec"
 )
 
+// runGit executes one git plumbing command under opts.Progress.
+//
+// The plumbing never streams: the spinner owns the terminal while it runs, and
+// git's chatter ("HEAD is now at …", a bare SHA from rev-parse) is machinery,
+// not a result. That makes the captured tail the only trace a failure leaves,
+// so a failing step records itself on pr and carries an excerpt of its output in
+// the error — otherwise silencing the stream would trade noise for a deploy that
+// fails with an exit code and no reason. Only the failing step is recorded: a
+// successful deploy's Commands stays the pipeline alone, which is what keeps
+// `rec-deploy logs` readable and the stored row small.
+//
+// pr may be nil for a step that runs before there is a PathResult to record on.
+func runGit(ctx context.Context, opts Options, pr *PathResult, title, command string, o privexec.Options) (privexec.Result, error) {
+	// Dropping Stream here, rather than at the call sites, makes "git plumbing is
+	// silent" a property of the plumbing that a new caller cannot forget.
+	// privexec.Options is passed by value, so this touches only our copy.
+	o.Stream = nil
+
+	var res privexec.Result
+	err := opts.step(title, func() error {
+		var runErr error
+		res, runErr = privexec.Run(ctx, command, o)
+
+		return runErr
+	})
+	if err == nil {
+		return res, nil
+	}
+
+	if pr != nil {
+		pr.Commands = append(pr.Commands, commandResult(res))
+	}
+	if excerpt := res.Excerpt(); excerpt != "" {
+		err = fmt.Errorf("%w: %s", err, excerpt)
+	}
+
+	return res, err
+}
+
 // headSHA returns the commit currently checked out — the rollback point.
-func headSHA(ctx context.Context, o privexec.Options) (string, error) {
-	res, err := privexec.Run(ctx, "git rev-parse HEAD", o)
+func headSHA(ctx context.Context, opts Options, pr *PathResult, o privexec.Options) (string, error) {
+	res, err := runGit(ctx, opts, pr, "Reading the current commit…", "git rev-parse HEAD", o)
 	if err != nil {
 		return "", fmt.Errorf("read current sha: %w", err)
 	}
@@ -22,13 +61,13 @@ func headSHA(ctx context.Context, o privexec.Options) (string, error) {
 // sync fast-forwards the checkout to origin/<branch>, hard. Running as the
 // directory's owner keeps new files correctly owned — php-fpm keeps working —
 // and avoids git's "dubious ownership" refusal.
-func sync(ctx context.Context, branch string, o privexec.Options) error {
-	for _, cmd := range []string{
-		"git fetch --all --prune",
-		"git reset --hard " + shellQuote("origin/"+branch),
-		"git clean -fd",
+func sync(ctx context.Context, opts Options, pr *PathResult, branch string, o privexec.Options) error {
+	for _, s := range []struct{ title, command string }{
+		{"Fetching origin…", "git fetch --all --prune"},
+		{"Resetting to origin/" + branch + "…", "git reset --hard " + shellQuote("origin/"+branch)},
+		{"Cleaning the working tree…", "git clean -fd"},
 	} {
-		if _, err := privexec.Run(ctx, cmd, o); err != nil {
+		if _, err := runGit(ctx, opts, pr, s.title, s.command, o); err != nil {
 			return err
 		}
 	}
@@ -37,11 +76,11 @@ func sync(ctx context.Context, branch string, o privexec.Options) error {
 }
 
 // resetTo puts the tree back on sha — the rollback.
-func resetTo(ctx context.Context, sha string, o privexec.Options) error {
-	if _, err := privexec.Run(ctx, "git reset --hard "+shellQuote(sha), o); err != nil {
+func resetTo(ctx context.Context, opts Options, pr *PathResult, sha string, o privexec.Options) error {
+	if _, err := runGit(ctx, opts, pr, "Restoring the previous commit…", "git reset --hard "+shellQuote(sha), o); err != nil {
 		return err
 	}
-	_, err := privexec.Run(ctx, "git clean -fd", o)
+	_, err := runGit(ctx, opts, pr, "Cleaning the working tree…", "git clean -fd", o)
 
 	return err
 }
@@ -51,10 +90,12 @@ func resetTo(ctx context.Context, sha string, o privexec.Options) error {
 // ignore it entirely and fail on any private repository. discover has already
 // verified that this origin names the repository the manifest declares, so the
 // rewrite cannot point the checkout somewhere new.
-func useSSHRemote(ctx context.Context, repository string, o privexec.Options) error {
+func useSSHRemote(ctx context.Context, opts Options, repository string, o privexec.Options) error {
 	url := "git@github.com:" + repository + ".git"
 
-	if _, err := privexec.Run(ctx, "git remote set-url origin "+shellQuote(url), o); err != nil {
+	// prepare has no PathResult yet, so this step's failure travels in the error
+	// alone — which still carries git's own message.
+	if _, err := runGit(ctx, opts, nil, "Pointing origin at ssh…", "git remote set-url origin "+shellQuote(url), o); err != nil {
 		return fmt.Errorf("rewrite origin to ssh: %w", err)
 	}
 	slog.Info("rewrote origin to ssh", "path", o.Dir, "url", url)

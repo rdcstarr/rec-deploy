@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/user"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -52,6 +53,27 @@ type Result struct {
 	Duration time.Duration
 	Output   string
 	TimedOut bool
+}
+
+// ExcerptRunes bounds Excerpt. A failure reason is rendered on one line — a
+// deploy summary line, a Telegram card row, an email row — so the excerpt has
+// to fit one.
+const ExcerptRunes = 240
+
+// Excerpt flattens the captured output into a single bounded line, for an error
+// message or any other single-line surface. The whole tail is collapsed rather
+// than one line of it picked: git puts its diagnosis first here ("fatal: '…'
+// does not appear to be a git repository") and second there ("git@github.com:
+// Permission denied (publickey)." above a generic "fatal:" line), so a rule
+// that guessed which line to keep would drop exactly the failures that matter.
+// The full text stays in Output, one `rec-deploy logs` away.
+func (r Result) Excerpt() string {
+	s := strings.Join(strings.Fields(r.Output), " ")
+	if runes := []rune(s); len(runes) > ExcerptRunes {
+		return string(runes[:ExcerptRunes-1]) + "…"
+	}
+
+	return s
 }
 
 // Run executes command with /bin/sh -c as opts.User, bounded by opts.Timeout.
