@@ -60,8 +60,15 @@ func enableCloudflareMCP(ctx context.Context, report bool) error {
 		{Label: "API token      recommended · fastest and easiest to clean up", Value: "token"},
 		{Label: "Browser login  no API token · opens Cloudflare authorization", Value: "browser"},
 	})
-	if err != nil || method == "" {
+	if err != nil {
 		return err
+	}
+	if method == "" {
+		// ui.Select answers Esc with an empty value and a nil error. Folding the
+		// two into one branch returned nil on a back-out, which dispatch reads as
+		// a completed command — err must be checked on its own so Ctrl+C's
+		// ui.ErrQuit is not silently downgraded to a back-out.
+		return ui.ErrBack
 	}
 
 	dir, err := config.MCPDir()
@@ -130,8 +137,11 @@ func enableCloudflareMCP(ctx context.Context, report bool) error {
 	rotate := cfg.MCP.TokenHash == ""
 	if !rotate {
 		choice, selectErr := ui.Select("MCP bearer token", []ui.Option{{Label: "Rotate token   recommended", Value: "rotate"}, {Label: "Keep current token", Value: "keep"}})
-		if selectErr != nil || choice == "" {
+		if selectErr != nil {
 			return selectErr
+		}
+		if choice == "" {
+			return ui.ErrBack
 		}
 		rotate = choice == "rotate"
 	}
@@ -398,8 +408,11 @@ func disableCloudflareMCP(ctx context.Context) error {
 		return nil
 	}
 	ok, err := ui.Confirm("Disable Cloudflare MCP and delete its public hostname?", "The tunnel and DNS record created by rec-deploy will be removed. Hestia and other web configuration remain untouched.")
-	if err != nil || !ok {
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return ui.ErrBack
 	}
 	accountID := cfg.MCP.Cloudflare.AccountID
 	if accountID == "" {
@@ -419,8 +432,14 @@ func disableCloudflareMCP(ctx context.Context) error {
 		return err
 	}
 	cf := cfg.MCP.Cloudflare
-	wasActive := stopMCPTunnel(ctx)
+	// Stopping the connector is the first act of the delete — Cloudflare refuses
+	// to remove a tunnel that still has a live connection — and it blocks while
+	// cloudflared drains its edges, so it belongs inside the spinner rather than
+	// as a dead pause right after the operator authorised the removal.
+	var wasActive bool
 	if err := ui.Spinner("Deleting the Cloudflare tunnel and hostname…", func() error {
+		wasActive = stopMCPTunnel(ctx)
+
 		return deleteCloudflareMCP(ctx, c, cf)
 	}); err != nil {
 		// Put the endpoint back the way it was found. Previously only a failure
@@ -498,8 +517,16 @@ func provisionWithToken(ctx context.Context, listen string) (*cloudflare.Client,
 		byID[z.ID] = z
 	}
 	selected, err := ui.Select("Select Cloudflare zone", options)
-	if err != nil || selected == "" {
+	if err != nil {
 		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, dnsClaim{}, "", err
+	}
+	if selected == "" {
+		// A back-out out of the zone picker returned a nil error with an empty
+		// zone, and the caller only checks the error — so provisioning went on
+		// with an empty zone, wrote a blank tunnel and hostname, started the
+		// units and only failed ~a minute later verifying https:///mcp. ErrBack
+		// stops it here, at the screen the operator actually backed out of.
+		return nil, cloudflare.Zone{}, cloudflare.Tunnel{}, dnsClaim{}, "", ui.ErrBack
 	}
 	zone := byID[selected]
 	hostname, existing, err := claimMCPHostname(ctx, c, zone)
@@ -666,8 +693,23 @@ func provisionWithBrowser(ctx context.Context, bin, listen string) (cloudflare.Z
 	}
 	cmd = exec.CommandContext(ctx, bin, "tunnel", "create", "--output", "json", tunnelNameFor(hostname))
 	cmd.Env = append(os.Environ(), "HOME="+home)
-	out, err := cmd.Output()
-	if err != nil {
+	var out []byte
+	if err := ui.Spinner("Creating Cloudflare tunnel…", func() error {
+		var e error
+		out, e = cmd.Output()
+
+		return e
+	}); err != nil {
+		// cmd.Output keeps stdout for the JSON decode below and captures stderr
+		// into the ExitError, which is where cloudflared writes the real cause —
+		// a duplicate name, an expired cert, a 403. Without surfacing it the
+		// operator saw only "exit status 1". CombinedOutput is not an option
+		// here: its stderr lines would corrupt the JSON this stdout carries.
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && len(exit.Stderr) > 0 {
+			return cloudflare.Zone{}, cloudflare.Tunnel{}, "", fmt.Errorf("create Cloudflare tunnel: %w: %s", err, strings.TrimSpace(string(exit.Stderr)))
+		}
+
 		return cloudflare.Zone{}, cloudflare.Tunnel{}, "", fmt.Errorf("create Cloudflare tunnel: %w", err)
 	}
 	var created struct{ ID, Name string }
@@ -694,8 +736,14 @@ func provisionWithBrowser(ctx context.Context, bin, listen string) (cloudflare.Z
 	}
 	cmd = exec.CommandContext(ctx, bin, "tunnel", "route", "dns", created.ID, hostname)
 	cmd.Env = append(os.Environ(), "HOME="+home)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return cloudflare.Zone{}, cloudflare.Tunnel{}, hostname, fmt.Errorf("create Cloudflare DNS route: %w: %s", err, strings.TrimSpace(string(out)))
+	var routeOut []byte
+	if err := ui.Spinner("Publishing HTTPS hostname…", func() error {
+		var e error
+		routeOut, e = cmd.CombinedOutput()
+
+		return e
+	}); err != nil {
+		return cloudflare.Zone{}, cloudflare.Tunnel{}, hostname, fmt.Errorf("create Cloudflare DNS route: %w: %s", err, strings.TrimSpace(string(routeOut)))
 	}
 	completed = true
 	return cloudflare.Zone{Name: zoneFromHostname(hostname), AccountID: v.AccountTag}, cloudflare.Tunnel{ID: created.ID, Name: created.Name, AccountID: v.AccountTag, Secret: v.TunnelSecret}, hostname, nil

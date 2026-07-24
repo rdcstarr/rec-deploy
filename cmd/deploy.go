@@ -165,7 +165,9 @@ func runRollback(ctx context.Context, slug, path string) error {
 			return err
 		}
 		if !ok {
-			return nil
+			// Declining is a back-out, not a completed rollback: nil would tell
+			// dispatch the command finished and unwind the whole session.
+			return ui.ErrBack
 		}
 	}
 
@@ -249,7 +251,17 @@ func record(ctx context.Context, st *store.Store, cfg *config.Config, deployID i
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 
-	recordResult(ctx, st, cfg, deployID, res, runErr)
+	// recordResult persists the run and then delivers notifications — a Telegram
+	// POST and a full SMTP exchange, synchronous and bounded only by the 30s
+	// budget above. Without the spinner that is a dead pause between the last
+	// streamed line and the per-checkout summary, on every deploy and rollback
+	// that has a channel configured. The daemon calls recordResult directly and
+	// so never spins; this wrapper is the CLI's alone.
+	_ = ui.Spinner("Recording the result…", func() error {
+		recordResult(ctx, st, cfg, deployID, res, runErr)
+
+		return nil
+	})
 }
 
 // report renders a finished run and returns its error unchanged, so a failed

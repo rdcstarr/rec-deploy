@@ -168,3 +168,28 @@ func TestPickerTruncatesRowsToTerminalWidth(t *testing.T) {
 		t.Errorf("narrow picker did not truncate its row:\n%s", view)
 	}
 }
+
+// TestPickerBackOutIsDistinctFromQuit pins the return contract every cmd-layer
+// back-out relies on: Esc leaves the picker with an empty value and NO error,
+// while Ctrl+C sets the quit flag Run turns into ErrQuit. Because a back-out and
+// a real choice both carry a nil error, a caller must test the error before the
+// empty value — folding them into `if err != nil || value == "" { return err }`
+// returned nil on Esc, which dispatch reads as a completed command and unwinds
+// the whole session. The split into err-first is what this contract forces.
+func TestPickerBackOutIsDistinctFromQuit(t *testing.T) {
+	opts := []Option{{Label: "a", Value: "a"}, {Label: "b", Value: "b"}}
+
+	esc, _ := pickerModel{Picker: Picker{Options: opts}}.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	back := esc.(pickerModel)
+	if back.quit {
+		t.Error("Esc set the quit flag; Run would return ErrQuit instead of a back-out")
+	}
+	if back.chosen != "" || back.err != nil {
+		t.Errorf("Esc = {chosen:%q err:%v}, want an empty value and no error", back.chosen, back.err)
+	}
+
+	quit, _ := pickerModel{Picker: Picker{Options: opts}}.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !quit.(pickerModel).quit {
+		t.Error("Ctrl+C did not set the quit flag; Run would not return ErrQuit")
+	}
+}

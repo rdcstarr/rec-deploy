@@ -437,7 +437,10 @@ func removeRepo(ctx context.Context, slug string) error {
 			return err
 		}
 		if !ok {
-			return nil
+			// Declining delivered nothing, so the caller's menu redraws rather
+			// than the whole session unwinding to the shell: a plain nil here
+			// reads to dispatch as a completed command.
+			return ui.ErrBack
 		}
 	}
 
@@ -532,7 +535,7 @@ func rotateRepo(ctx context.Context, slug string) error {
 			return err
 		}
 		if !ok {
-			return nil
+			return ui.ErrBack
 		}
 	}
 
