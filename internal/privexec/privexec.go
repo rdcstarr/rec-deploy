@@ -40,8 +40,8 @@ type Options struct {
 	Env []string
 	// Timeout bounds the command; DefaultTimeout when zero.
 	Timeout time.Duration
-	// Stream, when non-nil, receives the command's output live — `rec-deploy deploy`
-	// shows the pipeline as it runs instead of spinning on a dead pause.
+	// Stream, when non-nil, receives the command's output live as it is captured —
+	// an optional tee, mirroring exec.Cmd.Stdout. The tail is captured either way.
 	Stream io.Writer
 }
 

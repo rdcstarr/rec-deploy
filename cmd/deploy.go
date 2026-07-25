@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -17,7 +16,7 @@ import (
 	"github.com/rdcstarr/rec-deploy/internal/ui"
 )
 
-// newDeployCmd builds `deploy owner/repo`: deploy now, streaming the pipeline.
+// newDeployCmd builds `deploy owner/repo`: deploy now, one result line per checkout.
 func newDeployCmd() *cobra.Command {
 	var path string
 
@@ -74,9 +73,9 @@ func newRollbackCmd() *cobra.Command {
 	return cmd
 }
 
-// runDeploy deploys slug, streaming the pipeline to stdout — a deploy shows its
-// output live, so it never wraps in a spinner. It passes no Ref: every checkout
-// deploys the branch it is on.
+// runDeploy deploys slug. The pipeline runs suppressed under a spinner and only
+// the per-checkout result line reaches the terminal; the full output is in
+// `rec-deploy logs`. It passes no Ref: every checkout deploys the branch it is on.
 func runDeploy(ctx context.Context, slug, path string) error {
 	cfg := Config()
 
@@ -105,7 +104,6 @@ func runDeploy(ctx context.Context, slug, path string) error {
 		return err
 	}
 	if !flagJSON {
-		opts.Stream = os.Stdout
 		ui.Title("deploying " + repo.Repository)
 	}
 
@@ -126,7 +124,7 @@ func runDeploy(ctx context.Context, slug, path string) error {
 // runRollback resets every checkout of slug to the commit the last deploy moved
 // it off, and re-runs the pipeline of the tree it lands on. It is destructive —
 // the working tree is reset hard — so it confirms in a terminal and demands
-// --yes anywhere else. Like a deploy, it streams.
+// --yes anywhere else. Like a deploy, its output is suppressed to `rec-deploy logs`.
 func runRollback(ctx context.Context, slug, path string) error {
 	cfg := Config()
 
@@ -172,7 +170,6 @@ func runRollback(ctx context.Context, slug, path string) error {
 	}
 
 	if !flagJSON {
-		opts.Stream = os.Stdout
 		ui.Title("rolling " + repo.Repository + " back — " + plural(n, "checkout"))
 	}
 
@@ -253,10 +250,10 @@ func record(ctx context.Context, st *store.Store, cfg *config.Config, deployID i
 
 	// recordResult persists the run and then delivers notifications — a Telegram
 	// POST and a full SMTP exchange, synchronous and bounded only by the 30s
-	// budget above. Without the spinner that is a dead pause between the last
-	// streamed line and the per-checkout summary, on every deploy and rollback
-	// that has a channel configured. The daemon calls recordResult directly and
-	// so never spins; this wrapper is the CLI's alone.
+	// budget above. Without the spinner that is a dead pause between the deploy's
+	// own progress and the per-checkout summary, on every deploy and rollback that
+	// has a channel configured. The daemon calls recordResult directly and so
+	// never spins; this wrapper is the CLI's alone.
 	_ = ui.Spinner("Recording the result…", func() error {
 		recordResult(ctx, st, cfg, deployID, res, runErr)
 
