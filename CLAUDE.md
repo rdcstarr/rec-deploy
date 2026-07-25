@@ -190,9 +190,9 @@ interactive UI. A module is not "done" until it has both.
   suppresses all of it.** The git plumbing — `fetch`, `reset`, `clean`, `clone`,
   `rev-parse` — spins step by step, and the whole `post_deploy` pipeline runs under one
   `Running post_deploy…` spinner. The terminal shows only the per-checkout result line;
-  the full command output, success or failure, is kept in the database and read back with
-  `rec-deploy logs`, never dumped to the screen, because that chatter is machinery, not a
-  result. The engine takes the spinner as a plain func value on `deploy.Options`
+  the command's captured output — the tail `privexec` keeps (`TailBytes`), success or
+  failure — is kept in the database and read back with `rec-deploy logs`, never dumped to
+  the screen, because that chatter is machinery, not a result. The engine takes the spinner as a plain func value on `deploy.Options`
   (`Progress func(title string, action func() error) error`, nil in the daemon), so
   `internal/deploy` never imports `internal/ui`. **A suppressed command owes its output to
   its error** — a failing step folds `privexec.Result.Excerpt()` into the path's reason,
