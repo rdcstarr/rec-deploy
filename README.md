@@ -425,11 +425,11 @@ travels in the failure reason as a one-line cause, while the captured output of 
 command, failed or not — the last several kilobytes, as `rec-deploy` records for every
 step — stays in `rec-deploy logs`.
 
-The bare `rec-deploy` hub above is curated, not exhaustive: `deploy`, `repo`, `logs`,
-`status`, `scan`, `service`, `config`, `notifications`, `mcp`, `self-update` and `uninstall`,
-plus `init` until the setup wizard has run to completion. `rollback` is reached from the
-`repo` menu — every command above stays fully typable and listed in `--help` whether or not
-the hub shows it on its first screen.
+The bare `rec-deploy` hub above is curated, not exhaustive: `repo`, `logs`, `status`,
+`service`, `config`, `notifications`, `mcp`, `self-update` and `uninstall`, plus `init` until
+the setup wizard has run to completion. `deploy`, `scan` and `rollback` are repository work
+and are reached from the `repo` menu — every command above stays fully typable and listed in
+`--help` whether or not the hub shows it on its first screen.
 
 Choosing `deploy` or `logs` on a server with no repository registered is a first run, not
 an error: in a terminal it offers to register one and runs `repo add` if you say yes, and

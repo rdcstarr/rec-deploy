@@ -204,11 +204,9 @@ type hubEntry struct {
 // the real command names: what an operator reads here has to be what they can
 // type. TestEveryCommandIsReachable is what keeps this list honest.
 var hubEntries = []hubEntry{
-	{"deploy", "deploy a repository now"},
-	{"repo", "register, install and administer repositories"},
+	{"repo", "deploy, register, install and administer repositories"},
 	{"logs", "browse the deploy history"},
 	{"status", "daemon, units and discovered checkouts"},
-	{"scan", "show every checkout discovery finds"},
 	{"service", "start, stop or restart the webhook daemon"},
 	{"config", "server, GitHub and discovery settings"},
 	{"notifications", "Telegram and email: settings and test sends"},

@@ -59,28 +59,35 @@ func repoMenu(cmd *cobra.Command) error {
 	}).Run()
 }
 
+// repoRootCommands are the repo-menu choices registered on the root rather than
+// as children of repo. dispatch builds its argument list from the command it
+// walks from, so starting at repo would build "repo deploy" — an argument list
+// cobra cannot find. They live on the root because that is where an operator
+// types them; the menu is where they are reached from.
+var repoRootCommands = map[string]bool{"deploy": true, "scan": true, "rollback": true}
+
 // repoDispatchFrom resolves which command dispatch should walk from for one
-// repo-menu choice: rollback is registered on the root, not as a child of
-// repo, so dispatch has to start from cmd.Root() or it builds an argument
-// list — "repo rollback" — that cobra cannot find. Every other choice is a
-// genuine child of repo. Pulling this out of Handle as its own function is
-// what lets a test drive the decision directly, the same way inspect.go's
+// repo-menu choice. Pulling this out of Handle as its own function is what lets
+// a test drive the decision directly, the same way inspect.go's
 // lifecycleOptions does for the service menu.
 func repoDispatchFrom(cmd *cobra.Command, choice string) *cobra.Command {
-	if choice == "rollback" {
+	if repoRootCommands[choice] {
 		return cmd.Root()
 	}
 
 	return cmd
 }
 
-// repoMenuOptions lists what an operator does to a repository, ending with the
-// two that undo work.
+// repoMenuOptions lists what an operator does to a repository: the deploy they
+// came for first, then registration and inspection, ending with the two that
+// undo work.
 func repoMenuOptions() []ui.Option {
 	return ui.DescribedOptions(
+		ui.DescribedOption{Name: "deploy", Description: "deploy a repository now", Value: "deploy"},
 		ui.DescribedOption{Name: "add", Description: "register a repository: deploy key + webhook", Value: "add"},
 		ui.DescribedOption{Name: "list", Description: "every registered repository", Value: "list"},
 		ui.DescribedOption{Name: "show", Description: "one repository and its installations", Value: "show"},
+		ui.DescribedOption{Name: "scan", Description: "every checkout discovery finds on this server", Value: "scan"},
 		ui.DescribedOption{Name: "install", Description: "clone a repository into a path", Value: "install"},
 		ui.DescribedOption{Name: "rotate", Description: "roll the webhook secret and the deploy key", Value: "rotate"},
 		ui.DescribedOption{Name: "rollback", Description: "restore a checkout to the commit before its last deploy", Value: "rollback"},

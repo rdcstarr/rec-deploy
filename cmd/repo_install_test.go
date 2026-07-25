@@ -88,15 +88,15 @@ func TestCloneDestinationEntriesIncludesHiddenDirectories(t *testing.T) {
 	}
 }
 
-// TestRepoMenuOffersRollback pins that the repo menu offers rollback and that
-// choosing it resolves against the right command: rollback is a root-level
-// command, not a child of repo, and repo's Handle has to dispatch it from
-// cmd.Root() or the choice fails to resolve. The table also pins every other
-// entry to repo itself, so a routing regression on any of them fails here too,
-// and its length is checked against repoMenuOptions() so the two cannot drift
-// apart — an entry added to one without the other is a test failure, not a
-// silent gap in coverage.
-func TestRepoMenuOffersRollback(t *testing.T) {
+// TestRepoMenuRoutesEveryChoice pins what the repo menu offers and that each
+// choice resolves against the right command: deploy, scan and rollback are
+// root-level commands, not children of repo, and repo's Handle has to dispatch
+// them from cmd.Root() or the choice fails to resolve. The table also pins
+// every other entry to repo itself, so a routing regression on any of them
+// fails here too, and its length is checked against repoMenuOptions() so the
+// two cannot drift apart — an entry added to one without the other is a test
+// failure, not a silent gap in coverage.
+func TestRepoMenuRoutesEveryChoice(t *testing.T) {
 	root := newRootCmd()
 	repo, _, err := root.Find([]string{"repo"})
 	if err != nil {
@@ -105,9 +105,11 @@ func TestRepoMenuOffersRollback(t *testing.T) {
 
 	// value -> dispatches from root (true) or from repo itself (false).
 	routing := map[string]bool{
+		"deploy":   true,
 		"add":      false,
 		"list":     false,
 		"show":     false,
+		"scan":     true,
 		"install":  false,
 		"rotate":   false,
 		"rollback": true,

@@ -24,6 +24,8 @@ func TestEveryCommandIsReachable(t *testing.T) {
 
 	// Reachable from a group menu rather than from the hub.
 	nested := map[string]string{
+		"deploy":   "repo",
+		"scan":     "repo",
 		"rollback": "repo",
 	}
 
@@ -97,19 +99,22 @@ func TestHubOmitsPlumbingAndTheDaemon(t *testing.T) {
 	if !seen["uninstall"] {
 		t.Error("hub is missing the uninstall command")
 	}
-	if !seen["deploy"] {
-		t.Error("hub is missing the deploy command")
+
+	// deploy and scan are repository work and are reached from the repo menu;
+	// listing them here too would put the same command on two screens.
+	for _, rehomed := range []string{"deploy", "scan"} {
+		if seen[rehomed] {
+			t.Errorf("hub still lists %q — it belongs to the repo menu", rehomed)
+		}
 	}
 
-	// scan and service were reachable only from the menu that used to open
-	// under the status report. Deleting that menu makes the hub their only
-	// interactive entry point, and TestEveryCommandIsReachable's hand-written
-	// `nested` map cannot catch their loss: it asserts a claim rather than
-	// verifying one, so it would keep passing while lying.
-	for _, rehomed := range []string{"scan", "service"} {
-		if !seen[rehomed] {
-			t.Errorf("hub is missing %q — it has no other interactive entry point", rehomed)
-		}
+	// service was reachable only from the menu that used to open under the
+	// status report. Deleting that menu makes the hub its only interactive
+	// entry point, and TestEveryCommandIsReachable's hand-written `nested` map
+	// cannot catch its loss: it asserts a claim rather than verifying one, so
+	// it would keep passing while lying.
+	if !seen["service"] {
+		t.Error("hub is missing \"service\" — it has no other interactive entry point")
 	}
 }
 
