@@ -201,12 +201,16 @@ func runUninstall(ctx context.Context, keepGitHub, keepCloudflare, keepData bool
 			if !flagJSON {
 				ui.Success("deleted the Cloudflare tunnel and hostname")
 			}
-		case ui.IsQuit(cloudflareErr):
-			// Ctrl+C at the credentials prompt is the operator leaving, not a
-			// cleanup failure. Recording it as one printed "cloudflare cleanup
-			// failed: rec-deploy: quit interactive session" and then — with the
-			// data kept, so the gate never fires — removed the whole install
-			// anyway, which a numbered step would now make read as sanctioned.
+		case ui.IsQuit(cloudflareErr) || errors.Is(cloudflareErr, ui.ErrBack):
+			// Ctrl+C or Esc at the credentials prompt is the operator leaving, not
+			// a cleanup failure. Both stop the uninstall: recording either as a
+			// failure printed the navigation sentinel ("rec-deploy: back one
+			// level") into a warning and — with the data kept, so the gate fired
+			// on a deliberate back-out — offered to remove the whole install
+			// anyway, which a numbered step would make read as sanctioned. The
+			// deliberate skip is a different gesture: an empty token yields the
+			// actionable "no Cloudflare token given" error, which still flows to
+			// the gate below.
 			return cloudflareErr
 		case !flagJSON:
 			ui.Warn("cloudflare cleanup failed: " + cloudflareErr.Error())
