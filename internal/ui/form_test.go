@@ -178,3 +178,28 @@ func TestDescriptionIsRendered(t *testing.T) {
 		t.Errorf("unexpected description in bare view:\n%s", view)
 	}
 }
+
+// TestFormBackOutIsDistinctFromQuit pins the contract every form-based back-out
+// depends on — Prompt, SecretPrompt, Confirm all map this: Esc sets navBack
+// (which becomes ui.ErrBack, a back-out) while Ctrl+C sets navQuit (ui.ErrQuit).
+// Collapsing the two, or treating an Esc as a failure, is what let the uninstall
+// Cloudflare prompt count a deliberate back-out as a cleanup failure and leak the
+// "rec-deploy: back one level" sentinel into a warning.
+func TestFormBackOutIsDistinctFromQuit(t *testing.T) {
+	form := func() *huh.Form {
+		f := huh.NewForm(huh.NewGroup(huh.NewInput())).WithKeyMap(formKeyMap())
+		f.Init()
+
+		return f
+	}
+
+	esc, _ := formModel{form: form()}.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := esc.(formModel).nav; got != navBack {
+		t.Errorf("Esc set nav = %v, want navBack — a back-out, mapped to ui.ErrBack", got)
+	}
+
+	quit, _ := formModel{form: form()}.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if got := quit.(formModel).nav; got != navQuit {
+		t.Errorf("Ctrl+C set nav = %v, want navQuit — mapped to ui.ErrQuit", got)
+	}
+}
