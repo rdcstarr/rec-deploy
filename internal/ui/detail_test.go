@@ -29,3 +29,23 @@ func TestDetailNavigation(t *testing.T) {
 		t.Error("ctrl+c did not quit")
 	}
 }
+
+// A read-only view still has to be able to act on what it reports — the status
+// screen that knows the endpoint is unreachable is the one that must restart it.
+func TestDetailActionKeysExitWithTheKey(t *testing.T) {
+	d := Detail{Keys: []Key{{Key: "s", Help: "restart service"}}}
+
+	model, cmd := (detailModel{Detail: d}).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if cmd == nil || model.(detailModel).key != "s" || !model.(detailModel).closing {
+		t.Errorf("s did not exit as an action key: %+v", model)
+	}
+
+	// An unbound key is inert, and h stays the help toggle.
+	model, cmd = (detailModel{Detail: d}).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if cmd != nil || model.(detailModel).key != "" {
+		t.Error("an unbound key exited the view")
+	}
+	if view := (detailModel{Detail: d}).View(); !strings.Contains(view, "s restart service") {
+		t.Errorf("the footer does not advertise the action key:\n%s", view)
+	}
+}

@@ -255,9 +255,11 @@ func newMCPStatusCmd() *cobra.Command {
 }
 
 // mcpStatusView shows what remote MCP is doing and lets the operator act on it.
-// It was a ui.Detail, which by design has no keys at all — so the one screen
-// that knows the endpoint is unreachable could not restart the service, and the
-// token could not be reached from here either.
+// Status is a result, not a list of destinations, so it is a read-only ui.Detail
+// with nothing selectable on it — as a ui.Picker its rows read as sub-pages the
+// operator could enter, which they never were. The action keys stay, because
+// this is the one screen that knows the endpoint is unreachable and so the one
+// that must be able to restart the service.
 func mcpStatusView(cmd *cobra.Command) error {
 	for {
 		if ui.Quitting() {
@@ -278,47 +280,41 @@ func mcpStatusView(cmd *cobra.Command) error {
 			return err
 		}
 
-		items := make([]ui.DescribedOption, 0, len(rows))
-		for _, row := range rows {
-			items = append(items, ui.DescribedOption{Name: row[0], Description: row[1], Value: row[0]})
-		}
-
-		picker := ui.Picker{
-			Title:      ui.ScreenPath("rec-deploy", "MCP", "Status"),
-			Options:    ui.DescribedOptions(items...),
-			SelectHelp: "enable",
-			Help:       commandHelp(cmd),
-		}
-		if cfg.MCP.Enabled {
-			picker.SelectHelp = "no action"
-			picker.Keys = []ui.Key{
+		detail := ui.Detail{
+			Title: ui.ScreenPath("rec-deploy", "MCP", "Status"),
+			Rows:  rows,
+			Help:  commandHelp(cmd),
+			Keys: []ui.Key{
 				{Key: "t", Help: "token"},
 				{Key: "s", Help: "restart service"},
 				{Key: "r", Help: "re-check"},
-			}
+			},
+		}
+		if !cfg.MCP.Enabled {
+			// Off, there is one row and nothing to restart or re-probe; the only
+			// thing to do from here is turn it on.
+			detail.Keys = []ui.Key{{Key: "e", Help: "enable"}}
 		}
 
-		res, err := picker.Run()
+		key, err := detail.RunKey()
 		if err != nil {
-			return err
+			return err // ErrBack when the operator stepped back, ErrQuit when they quit
 		}
 
 		// token and enable are children of mcp, not of status — dispatch needs the
 		// parent command's own children to resolve them.
 		var actionErr error
-		switch {
-		case res.Value == "":
-			return ui.ErrBack
-		case res.Key == "t":
+		switch key {
+		case "t":
 			actionErr = dispatch(cmd.Parent(), "token")
-		case res.Key == "s":
+		case "s":
 			if actionErr = restartMCPService(cmd.Context(), cfg); actionErr == nil {
 				actionErr = ui.ErrDone // the restart is the request, and it is done
 			}
-		case res.Key == "r":
-			// The loop re-probes.
-		case !cfg.MCP.Enabled:
+		case "e":
 			actionErr = dispatch(cmd.Parent(), "enable")
+		case "r":
+			// The loop re-probes.
 		}
 
 		// ui.ErrDone gets the same exit arm the quit signal has, the way

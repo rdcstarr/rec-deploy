@@ -9,7 +9,7 @@ type Report struct {
 
 // Run opens the report as an interactive detail screen.
 func (r Report) Run() error {
-	return Detail(r).Run()
+	return Detail{Title: r.Title, Rows: r.Rows}.Run()
 }
 
 // Print writes the report in the standard non-interactive layout.
