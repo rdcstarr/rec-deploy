@@ -639,45 +639,45 @@ func TestRollbackSkipsACheckoutAlreadyAtItsTarget(t *testing.T) {
 	}
 }
 
-// TestRunStreamsThePipelineButNotTheGitPlumbing is the rule this package now
-// owes the CLI: a deploy streams what the manifest ran and stays silent about
-// the git that moved the tree. The fixture is deliberately behind and dirty —
-// a second upstream commit plus an untracked file — so fetch, reset and clean
-// all have something to say, and the assertions are not vacuous.
-func TestRunStreamsThePipelineButNotTheGitPlumbing(t *testing.T) {
-	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo pipeline-marker\n")
+// TestRunRunsThePipelineUnderOneProgressTitle pins what replaced the stream: the
+// whole post_deploy pipeline runs under a single "Running post_deploy…" title
+// rather than announcing each step, no manifest command shows as a title, and
+// the steps really run under the wrapper. Nothing streams — the engine has no
+// sink to observe, which the deleted Stream field enforced at compile time.
+func TestRunRunsThePipelineUnderOneProgressTitle(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo one\n  - echo two > marker\n")
 	dir := checkout(t, bare, "o/r")
 
-	work := clone(t, bare)
-	if err := os.WriteFile(filepath.Join(work, "second"), []byte("x"), 0o644); err != nil {
-		t.Fatalf("write second: %v", err)
-	}
-	git(t, work, "add", ".")
-	git(t, work, "commit", "-m", "second")
-	git(t, work, "push", "origin", "main")
-
-	if err := os.WriteFile(filepath.Join(dir, "untracked"), []byte("x"), 0o644); err != nil {
-		t.Fatalf("write untracked: %v", err)
-	}
-
-	var sink strings.Builder
+	var titles []string
 	o := opts(t, dir, "o/r", "refs/heads/main")
-	o.Stream = &sink
+	o.Progress = func(title string, action func() error) error {
+		titles = append(titles, title)
+
+		return action()
+	}
 
 	res, err := Run(context.Background(), o)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-
-	streamed := sink.String()
-	if !strings.Contains(streamed, "pipeline-marker") {
-		t.Errorf("the pipeline did not stream; got %q", streamed)
+	if res.Status != "success" {
+		t.Fatalf("Status = %s, want success: %+v", res.Status, res.Paths)
 	}
-	// git's own chatter from rev-parse, fetch, reset and clean respectively.
-	for _, noise := range []string{res.Paths[0].NewSHA, " -> origin/", "HEAD is now at", "Removing "} {
-		if strings.Contains(streamed, noise) {
-			t.Errorf("git plumbing leaked %q into the stream: %q", noise, streamed)
+
+	var pipeline int
+	for _, title := range titles {
+		if strings.Contains(title, "echo one") || strings.Contains(title, "echo two") {
+			t.Errorf("a manifest step announced itself as a Progress title: %q", title)
 		}
+		if title == "Running post_deploy…" {
+			pipeline++
+		}
+	}
+	if pipeline != 1 {
+		t.Errorf("titles = %v, want exactly one \"Running post_deploy…\" over the whole pipeline", titles)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "marker")); err != nil {
+		t.Errorf("the pipeline did not run under the wrapper: %v", err)
 	}
 }
 
@@ -816,8 +816,14 @@ func TestRunReturnsTheProgressHooksErrorUnchanged(t *testing.T) {
 	before := git(t, dir, "rev-parse", "HEAD")
 
 	o := opts(t, dir, "o/r", "refs/heads/main")
-	o.Progress = func(string, func() error) error {
-		return os.ErrPermission // never calls action
+	o.Progress = func(title string, action func() error) error {
+		// Discovery runs through the same hook now; let it through so a target is
+		// found, then refuse the git steps this test is about.
+		if strings.Contains(title, "Discovering") {
+			return action()
+		}
+
+		return os.ErrPermission // never calls the git step's action
 	}
 
 	res, err := Run(context.Background(), o)
@@ -835,10 +841,13 @@ func TestRunReturnsTheProgressHooksErrorUnchanged(t *testing.T) {
 	}
 }
 
-// TestRollbackDoesNotStreamTheGitPlumbing covers resetTo, which is a different
-// code path from sync and which `rec-deploy rollback` streams too.
-func TestRollbackDoesNotStreamTheGitPlumbing(t *testing.T) {
-	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo pipeline-marker\n")
+// TestRollbackRunsThePipelineUnderProgress covers resetTo, a different code path
+// from sync, and guards the double-wrap: the reset keeps its own git step title
+// and the pipeline title appears exactly once. A single spinner around
+// rollbackTo's whole body would fold the reset's git steps under the pipeline —
+// this counts both and would catch that.
+func TestRollbackRunsThePipelineUnderProgress(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo reran > marker\n")
 	dir := checkout(t, bare, "o/r")
 	first := git(t, dir, "rev-parse", "HEAD")
 
@@ -852,20 +861,115 @@ func TestRollbackDoesNotStreamTheGitPlumbing(t *testing.T) {
 	git(t, dir, "fetch", "origin")
 	git(t, dir, "reset", "--hard", "origin/main")
 
-	var sink strings.Builder
+	var titles []string
 	o := opts(t, dir, "o/r", "")
-	o.Stream = &sink
 	o.RollbackSHAs = map[string]string{dir: first}
+	o.Progress = func(title string, action func() error) error {
+		titles = append(titles, title)
+
+		return action()
+	}
 
 	if _, err := Rollback(context.Background(), o); err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
 
-	streamed := sink.String()
-	if !strings.Contains(streamed, "pipeline-marker") {
-		t.Errorf("the rollback's pipeline did not stream; got %q", streamed)
+	var reset, pipeline int
+	for _, title := range titles {
+		if strings.Contains(title, "echo reran") {
+			t.Errorf("a manifest step announced itself as a Progress title: %q", title)
+		}
+		if title == "Restoring the previous commit…" {
+			reset++
+		}
+		if title == "Running post_deploy…" {
+			pipeline++
+		}
 	}
-	if strings.Contains(streamed, "HEAD is now at") {
-		t.Errorf("the rollback's reset leaked into the stream: %q", streamed)
+	if reset != 1 {
+		t.Errorf("titles = %v, want the reset announced as its own git step", titles)
+	}
+	if pipeline != 1 {
+		t.Errorf("titles = %v, want exactly one pipeline wrapper — resetTo must not be folded into it", titles)
+	}
+}
+
+// TestRunDiscoversUnderProgress pins the fix for a deploy that sat on a silent
+// filesystem walk before any git step: discovery now announces itself through
+// the same Progress hook the git plumbing uses, so the CLI shows a spinner and
+// the daemon (nil hook) runs it inline. It also guards the ordering — discovery
+// must be the first thing the hook sees, before the git plumbing.
+func TestRunDiscoversUnderProgress(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo deployed > marker\n")
+	dir := checkout(t, bare, "o/r")
+
+	var titles []string
+	o := opts(t, dir, "o/r", "refs/heads/main")
+	o.Progress = func(title string, action func() error) error {
+		titles = append(titles, title)
+
+		return action()
+	}
+
+	if _, err := Run(context.Background(), o); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(titles) == 0 || !strings.Contains(titles[0], "Discovering") {
+		t.Fatalf("titles = %v, want discovery announced first", titles)
+	}
+}
+
+// TestRunFoldsAFailedPipelineStepsOutputIntoTheReason is the correction the
+// suppression owes: once the pipeline no longer streams, a failed step's cause
+// exists only in its captured output, so runPipeline folds an excerpt into the
+// error the same way runGit does for the git plumbing. Without it a failed
+// build would report "command failed with exit 1: …" and no reason.
+func TestRunFoldsAFailedPipelineStepsOutputIntoTheReason(t *testing.T) {
+	// The step cats a missing file, so the cause ("No such file or directory")
+	// lives in the command's OUTPUT, not in the command string privexec's error
+	// already names — otherwise the assertion would pass with no fold at all.
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - cat /no/such/rec-deploy-path\n")
+	dir := checkout(t, bare, "o/r")
+
+	res, err := Run(context.Background(), opts(t, dir, "o/r", "refs/heads/main"))
+	if err == nil {
+		t.Fatal("Run of a failing pipeline returned nil error")
+	}
+	if len(res.Paths) != 1 || res.Paths[0].Status != "failed" {
+		t.Fatalf("Paths = %+v, want one failed path", res.Paths)
+	}
+
+	reason := res.Paths[0].Reason
+	if !strings.Contains(reason, "No such file or directory") {
+		t.Errorf("Reason = %q, want the failing step's own output folded in", reason)
+	}
+	if !strings.Contains(reason, "exit 1") {
+		t.Errorf("Reason = %q, want the exit code", reason)
+	}
+	// Reason is rendered on one line — a summary row, a Telegram card, an email.
+	if strings.Contains(reason, "\n") {
+		t.Errorf("Reason = %q, want a single line", reason)
+	}
+}
+
+// TestRunRecordsAFailedPipelineStepsFullOutput pins the other half: the full
+// output the excerpt was cut from stays retrievable through `rec-deploy logs`.
+func TestRunRecordsAFailedPipelineStepsFullOutput(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo line-a >&2; echo line-b >&2; echo FAIL >&2; exit 1\n")
+	dir := checkout(t, bare, "o/r")
+
+	res, _ := Run(context.Background(), opts(t, dir, "o/r", "refs/heads/main"))
+	if len(res.Paths) != 1 || len(res.Paths[0].Commands) != 1 {
+		t.Fatalf("Commands = %+v, want the one failing pipeline step recorded", res.Paths)
+	}
+
+	cmd := res.Paths[0].Commands[0]
+	if cmd.ExitCode == 0 {
+		t.Errorf("ExitCode = %d, want a failure", cmd.ExitCode)
+	}
+	for _, want := range []string{"line-a", "line-b", "FAIL"} {
+		if !strings.Contains(cmd.Output, want) {
+			t.Errorf("Output = %q, want the full tail to contain %q", cmd.Output, want)
+		}
 	}
 }

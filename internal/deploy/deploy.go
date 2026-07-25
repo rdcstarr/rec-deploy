@@ -12,7 +12,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/user"
 	"strconv"
@@ -53,14 +52,12 @@ type Options struct {
 	Roots, Prune []string
 	// KeysDir, LocksDir and KnownHosts are rec-deploy's state paths.
 	KeysDir, LocksDir, KnownHosts string
-	// Stream, when non-nil, receives the post_deploy pipeline's output live.
-	// `rec-deploy deploy` streams the pipeline; it must never spin over it. Git
-	// plumbing never reaches this writer — that runs under Progress instead.
-	Stream io.Writer
-	// Progress, when non-nil, wraps each git plumbing step with a description
-	// while it blocks. The signature is ui.Spinner's, so the CLI assigns it
-	// directly and the daemon leaves it nil, which runs the step inline — that is
-	// what keeps this package free of internal/ui.
+	// Progress, when non-nil, wraps each blocking step — discovery, the git
+	// plumbing, the post_deploy pipeline — with a description while it runs. The
+	// signature is ui.Spinner's, so the CLI assigns it directly and the daemon
+	// leaves it nil, which runs the step inline — that is what keeps this package
+	// free of internal/ui. Nothing streams to the terminal; command output is
+	// captured for the store and read back with `rec-deploy logs`.
 	Progress func(title string, action func() error) error
 }
 
@@ -193,8 +190,18 @@ func newResult(opts Options) Result {
 // targets finds every checkout of the repository, narrowed to opts.Path when it
 // is set. Finding none is an error, never silence.
 func targets(ctx context.Context, opts Options) ([]discover.Installation, error) {
-	all, err := discover.Scan(ctx, discover.Options{Roots: opts.Roots, Prune: opts.Prune})
-	if err != nil {
+	// Discovery walks every configured root before anything else runs, and on a
+	// server with many sites that is tens of seconds. It is the first thing a
+	// deploy does after "deploying …", so without the spinner it is a dead pause
+	// with no sign of life — the git plumbing that follows already spins through
+	// the same hook. The daemon leaves Progress nil and so runs it inline.
+	var all []discover.Installation
+	if err := opts.step("Discovering checkouts…", func() error {
+		var e error
+		all, e = discover.Scan(ctx, discover.Options{Roots: opts.Roots, Prune: opts.Prune})
+
+		return e
+	}); err != nil {
 		return nil, err
 	}
 
@@ -297,7 +304,7 @@ func deployPath(ctx context.Context, in discover.Installation, opts Options) Pat
 		return pr
 	}
 
-	stepErr := runPipeline(ctx, m.PostDeploy, exec, &pr)
+	stepErr := runPipeline(ctx, opts, m.PostDeploy, exec, &pr)
 	if stepErr == nil {
 		pr.Status = store.StatusSuccess
 		return pr
@@ -425,7 +432,7 @@ func prepare(ctx context.Context, in discover.Installation, opts Options) (prive
 		return privexec.Options{}, nil, fmt.Errorf("unknown owner uid %d of %s: %w", in.UID, in.Path, err)
 	}
 
-	exec := privexec.Options{Dir: in.Path, User: owner, Stream: opts.Stream}
+	exec := privexec.Options{Dir: in.Path, User: owner}
 
 	// The private key never touches the site user's disk: it is served from an
 	// ephemeral agent whose socket dies with this deploy. A repository with no
@@ -486,32 +493,45 @@ func prepare(ctx context.Context, in discover.Installation, opts Options) (prive
 	return exec, cleanup, nil
 }
 
-// runPipeline runs the post_deploy steps in order, recording each. It stops at
-// the first failure unless the step sets continue_on_failure. Every step gets a
-// real timeout — an old implementation parses the timeout and never applies it, so a
-// cold `composer install` dies at Laravel's 60s default.
-func runPipeline(ctx context.Context, steps []manifest.Step, exec privexec.Options, pr *PathResult) error {
-	for _, s := range steps {
-		o := exec
-		o.Timeout = s.Timeout
-
-		res, err := privexec.Run(ctx, s.Run, o)
-		pr.Commands = append(pr.Commands, commandResult(res))
-
-		if err != nil && !s.ContinueOnFailure {
-			return err
-		}
+// runPipeline runs the post_deploy steps in order under one "Running
+// post_deploy…" spinner, recording each. It stops at the first failure unless
+// the step sets continue_on_failure, and folds that step's output excerpt into
+// the error so a suppressed pipeline still fails with a reason — the same debt
+// the git plumbing pays. Every step gets a real timeout — an old implementation
+// parses the timeout and never applies it, so a cold `composer install` dies at
+// Laravel's 60s default.
+func runPipeline(ctx context.Context, opts Options, steps []manifest.Step, exec privexec.Options, pr *PathResult) error {
+	if len(steps) == 0 {
+		return nil
 	}
 
-	return nil
+	return opts.step("Running post_deploy…", func() error {
+		for _, s := range steps {
+			o := exec
+			o.Timeout = s.Timeout
+
+			res, err := privexec.Run(ctx, s.Run, o)
+			pr.Commands = append(pr.Commands, commandResult(res))
+
+			if err != nil && !s.ContinueOnFailure {
+				if excerpt := res.Excerpt(); excerpt != "" {
+					err = fmt.Errorf("%w: %s", err, excerpt)
+				}
+
+				return err
+			}
+		}
+
+		return nil
+	})
 }
 
 // rollbackTo resets the tree to sha and re-runs the manifest that tree carries —
 // the previous manifest, since the manifest versions with the code.
-// The spinner goes inside resetTo, not around this whole function: the reset
-// must be silent but the manifest it re-runs must stream, and wrapping both
-// would either hide that pipeline's output or let the spinner's redraw on
-// stderr clobber it on stdout.
+// It wraps nothing itself: resetTo already spins each git step and runPipeline
+// spins the whole pipeline under one title. The two run in sequence, never
+// nested — a single spinner around this function would fold the reset's own git
+// steps under the pipeline's.
 func rollbackTo(ctx context.Context, opts Options, sha string, exec privexec.Options, pr *PathResult) error {
 	if err := resetTo(ctx, opts, pr, sha, exec); err != nil {
 		return err
@@ -523,7 +543,7 @@ func rollbackTo(ctx context.Context, opts Options, sha string, exec privexec.Opt
 		return err
 	}
 
-	return runPipeline(ctx, m.PostDeploy, exec, pr)
+	return runPipeline(ctx, opts, m.PostDeploy, exec, pr)
 }
 
 // verifyOrigin re-checks the pulled manifest against the checkout's origin. The
