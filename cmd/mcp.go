@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -386,10 +387,43 @@ func mcpStatusRows(cfg *config.Config) [][2]string {
 	// Only a Cloudflare endpoint has a public URL to probe; there is nothing to
 	// report for a listener reachable only from this network.
 	if cfg.MCP.Mode == "cloudflare" && cfg.MCP.PublicURL != "" {
-		rows = append(rows, [2]string{"reachable", mcpPublicState(cfg)})
+		state := mcpPublicState(cfg)
+		rows = append(rows, [2]string{"reachable", state})
+
+		// Where the hostname points is the fact that explains a failed probe,
+		// and the operator cannot see it from here otherwise. A name caught by
+		// a zone's wildcard resolves perfectly well and still goes nowhere near
+		// the tunnel — which reads as an endpoint that is simply down.
+		if strings.HasPrefix(state, "unreachable") {
+			rows = append(rows, [2]string{"resolves", mcpHostResolution(cfg.MCP.PublicURL)})
+		}
 	}
 
 	return rows
+}
+
+// mcpHostResolution reports what the endpoint's hostname resolves to, so a
+// record pointing somewhere other than the Cloudflare edge is visible rather
+// than inferred.
+func mcpHostResolution(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return "invalid URL"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupHost(ctx, parsed.Hostname())
+	if err != nil {
+		var dns *net.DNSError
+		if errors.As(err, &dns) && dns.IsNotFound {
+			return "no DNS record"
+		}
+
+		return "lookup failed"
+	}
+
+	return strings.Join(addrs, ", ")
 }
 
 // mcpAccessState names how clients reach this server, replacing the three rows
@@ -732,11 +766,35 @@ func mcpPublicState(cfg *config.Config) string {
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "unreachable"
+		return "unreachable — " + probeFailure(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusUnauthorized {
 		return "ready"
 	}
 	return fmt.Sprintf("HTTP %d", resp.StatusCode)
+}
+
+// probeFailure names why the probe never got a reply. The distinction is the
+// whole diagnosis: a timeout is a hostname pointing at an address nothing
+// answers on, a refused connection is a host that answered and had nothing
+// listening, and a DNS error is a record that was never created. Collapsed into
+// one word they all read as "the tunnel is down".
+func probeFailure(err error) string {
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		if dns.IsNotFound {
+			return "no DNS record"
+		}
+
+		return "DNS lookup failed"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err) {
+		return "timed out"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return "connection refused"
+	}
+
+	return "connection failed"
 }

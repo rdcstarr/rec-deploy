@@ -185,39 +185,54 @@ func TestConfigMenuOptionsCarryDescriptions(t *testing.T) {
 	}
 }
 
-// TestNotificationSectionsOfferATest pins that notify leaves the hub with a
-// home: sending a test message belongs beside the settings it exercises, and
-// the notification sections are the only interactive way to it now. The
-// negative half is driven off configSections rather than a hardcoded list of
-// non-notification sections, so a change that leaked "test" into every
-// section — including ones added later — cannot pass by omission.
+// TestNotificationSectionsOfferATest pins that a channel's test sits beside the
+// settings it exercises. The negative half is driven off configSections rather
+// than a hardcoded list of non-notification sections, so a change that leaked
+// "test" into every section — including ones added later — cannot pass by
+// omission.
 func TestNotificationSectionsOfferATest(t *testing.T) {
 	saved := cfg
 	defer func() { cfg = saved }()
 	cfg = &config.Config{}
 
-	notifySections := map[string]bool{"telegram": true, "email": true}
-
-	for section := range notifySections {
+	for _, channel := range notifyChannels {
 		var found bool
-		for _, option := range configSectionOptions(section) {
+		for _, option := range configSectionOptions(channel.Key) {
 			if option.Value == "test" {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("the %s section does not offer a test send", section)
+			t.Errorf("the %s section does not offer a test send", channel.Key)
 		}
 	}
 
 	for _, section := range configSections {
-		if notifySections[section.Key] {
-			continue
-		}
 		for _, option := range configSectionOptions(section.Key) {
 			if option.Value == "test" {
 				t.Errorf("the %s section offers a notification test", section.Key)
 			}
+		}
+	}
+}
+
+// TestConfigDoesNotAlsoOwnTheChannels pins the move: a field editable from two
+// menus is a field that gets edited in the wrong one, and the notification
+// channels now belong to `notifications`. Their keys stay reachable from
+// `config get`/`config set`, which is what scripts use — only the interactive
+// section left.
+func TestConfigDoesNotAlsoOwnTheChannels(t *testing.T) {
+	for _, section := range configSections {
+		for _, channel := range notifyChannels {
+			if section.Key == channel.Key {
+				t.Errorf("%q is offered by both config and notifications", section.Key)
+			}
+		}
+	}
+
+	for _, key := range []string{"notify.telegram.token", "notify.email.smtp"} {
+		if _, ok := findConfigField(key); !ok {
+			t.Errorf("%s is no longer a known config key — config get/set just broke", key)
 		}
 	}
 }

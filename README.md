@@ -91,10 +91,10 @@ the `gh` CLI happens to be installed — `gh` is supported, never required. Conf
 `/etc/rec-deploy/config.yaml`, mode `0600`.
 
 Config edits apply live: the daemon re-reads its configuration for every
-delivery, so a channel configured with `rec-deploy config` works on the very
+delivery, so a channel configured with `rec-deploy notifications` works on the very
 next push — no restart. Only the listen address and the public URL, which bind
 at startup, need `systemctl restart rec-deploy`. When in doubt,
-`rec-deploy notify test` reports every channel's outcome on the spot.
+`rec-deploy notifications test` reports every channel's outcome on the spot.
 
 ### Setup walkthrough
 
@@ -148,7 +148,7 @@ rejects them you are offered **Try again**, **Save anyway** or **Skip**, so a
 wrong chat ID or password cannot be saved without you deciding to. Declining both
 channels runs without notifications. There is no separate "send a test
 notification?" question any more — it existed because nothing else proved the
-credentials, and each channel now proves its own. `rec-deploy notify test`
+credentials, and each channel now proves its own. `rec-deploy notifications test`
 delivers a real message whenever you want one.
 
 **[7] Auto-update** — opt-in systemd timer that checks releases hourly and swaps
@@ -164,7 +164,7 @@ waiting for a greeting that never comes.
 Verification is a property of the interactive setup only. `rec-deploy config set
 notify.telegram.token …` and its siblings stay format-checked and offline, so a
 scripted or CI run never depends on reaching Telegram or a mail server; use
-`rec-deploy notify test` when you want the round trip.
+`rec-deploy notifications test` when you want the round trip.
 
 #### Getting a GitHub token
 
@@ -393,7 +393,7 @@ rec-deploy scan                         # what discovery finds, and why
 rec-deploy status                       # daemon health, repos, last deploy per path
 rec-deploy service start|stop|restart   # the systemd unit that runs the daemon
 rec-deploy logs [owner/repo]            # deploy history
-rec-deploy notify test                  # send a test notification and report each channel's outcome
+rec-deploy notifications [test]         # channel settings; test probes one channel or all of them
 
 rec-deploy config get <key> | set <key> <value> | path
 rec-deploy self-update                  # SHA-256 verified against checksums.txt; fails closed
@@ -426,10 +426,10 @@ command, failed or not — the last several kilobytes, as `rec-deploy` records f
 step — stays in `rec-deploy logs`.
 
 The bare `rec-deploy` hub above is curated, not exhaustive: `deploy`, `repo`, `logs`,
-`status`, `scan`, `service`, `config`, `mcp`, `self-update` and `uninstall`, plus `init`
-until the setup wizard has run to completion. `rollback` is reached from the `repo` menu
-and `notify test` from the Telegram/Email sections of `config` — every command above stays
-fully typable and listed in `--help` whether or not the hub shows it on its first screen.
+`status`, `scan`, `service`, `config`, `notifications`, `mcp`, `self-update` and `uninstall`,
+plus `init` until the setup wizard has run to completion. `rollback` is reached from the
+`repo` menu — every command above stays fully typable and listed in `--help` whether or not
+the hub shows it on its first screen.
 
 Choosing `deploy` or `logs` on a server with no repository registered is a first run, not
 an error: in a terminal it offers to register one and runs `repo add` if you say yes, and

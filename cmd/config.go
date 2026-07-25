@@ -70,29 +70,30 @@ func configMenuOptions() []ui.Option {
 
 // openConfigSection opens a scoped overview before editing one setting. Secret
 // values stay masked here and can be revealed only inside their own editor.
-// Telegram and email also offer "Send a test", which dispatches to the
-// top-level notify command rather than editing a field.
 func openConfigSection(cmd *cobra.Command, section string) error {
+	return openSettingsSection(cmd, section, ui.ScreenPath("rec-deploy", "Config", configSectionTitle(section)))
+}
+
+// openSettingsSection is the section editor both `config` and `notifications`
+// open: the same fields, editor and validation under whichever breadcrumb the
+// operator arrived by. A notification channel adds "Send a test", which probes
+// that channel alone — the settings on screen are the ones it exercises.
+func openSettingsSection(cmd *cobra.Command, section, title string) error {
 	return (ui.Menu{
-		Title:      ui.ScreenPath("rec-deploy", "Config", configSectionTitle(section)),
+		Title:      title,
 		Options:    func() []ui.Option { return configSectionOptions(section) },
 		SelectHelp: "edit setting",
 		BackValues: map[string]bool{"back": true},
 		Handle: func(key string) error {
 			if key == "test" {
-				// dispatch builds its argument list from cmd's own CommandPath,
-				// so dispatching straight from the root would resolve to
-				// ["notify"] — the group node — and open its one-entry submenu
-				// instead of running the leaf. Resolving the notify node first
-				// makes its CommandPath "rec-deploy notify", so dispatching
-				// "test" from it builds ["notify", "test"] and runs the leaf
-				// directly, the same way mcp.go reaches "token" from its parent.
-				notifyCmd, _, err := cmd.Root().Find([]string{"notify"})
-				if err != nil {
-					return err
+				if err := runNotifyTest(cmd.Context(), section); err != nil {
+					return err // the menu renders it and redraws, so the retry is one key away
 				}
 
-				return dispatch(notifyCmd, "test")
+				// The probe is the request and it has been answered on screen;
+				// this menu must not redraw over its result. A failure above
+				// deliberately does redraw — that one is worth retrying here.
+				return ui.ErrDone
 			}
 
 			return configureConfigField(cmd.Context(), key)
@@ -109,12 +110,14 @@ type configSection struct {
 	Description string
 }
 
+// configSections is what `config` offers. The notification channels are
+// sections too, but they live in notifyChannels and are reached from
+// `notifications`, beside the test that exercises them — a field editable from
+// two menus is a field that gets edited in the wrong one.
 var configSections = []configSection{
 	{Key: "server", Title: "Server", Description: "where the daemon listens and the URL GitHub posts to"},
 	{Key: "github", Title: "GitHub", Description: "the token that manages deploy keys and webhooks"},
 	{Key: "discovery", Title: "Discovery", Description: "where checkouts are looked for on this server"},
-	{Key: "telegram", Title: "Telegram", Description: "send deploy results to a Telegram chat"},
-	{Key: "email", Title: "Email", Description: "send deploy results by email"},
 }
 
 // configField is the single source of truth for every configurable value. The
@@ -165,7 +168,7 @@ func findConfigField(key string) (configField, bool) {
 }
 
 func configSectionTitle(section string) string {
-	for _, item := range configSections {
+	for _, item := range append(append([]configSection{}, configSections...), notifyChannels...) {
 		if item.Key == section {
 			return item.Title
 		}
@@ -185,10 +188,13 @@ func configSectionOptions(section string) []ui.Option {
 		items = append(items, ui.DescribedOption{Name: field.Label, Description: field.display(cfg), Value: field.Key})
 	}
 
-	// Testing a channel belongs beside the settings it exercises, not in a
-	// top-level command whose entire content is one action.
-	if section == "telegram" || section == "email" {
-		items = append(items, ui.DescribedOption{Name: "Send a test", Description: "deliver a sample deploy summary through this channel", Value: "test"})
+	// Testing a channel belongs beside the settings it exercises, and it probes
+	// that channel alone: a test opened from Telegram that also sends mail is a
+	// surprise rather than a test.
+	for _, channel := range notifyChannels {
+		if channel.Key == section {
+			items = append(items, ui.DescribedOption{Name: "Send a test", Description: "deliver a sample deploy summary through " + channel.Title + " only", Value: "test"})
+		}
 	}
 
 	options := ui.DescribedOptions(items...)
@@ -406,7 +412,7 @@ func configureTelegram(ctx context.Context) error {
 		// Two blank answers are a change of mind, not a broken credential; there
 		// is nothing to prove against the API and nothing to complain about.
 		if token == "" && chatID == "" {
-			ui.Info("telegram left unconfigured — add it later with `rec-deploy config`")
+			ui.Info("telegram left unconfigured — add it later with `rec-deploy notifications`")
 
 			return nil
 		}
@@ -491,7 +497,7 @@ func configureEmail(ctx context.Context) error {
 
 		// An empty form is a change of mind, not a broken credential.
 		if smtp == "" && from == "" && to == "" {
-			ui.Info("email left unconfigured — add it later with `rec-deploy config`")
+			ui.Info("email left unconfigured — add it later with `rec-deploy notifications`")
 
 			return nil
 		}

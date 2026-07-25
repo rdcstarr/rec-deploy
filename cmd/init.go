@@ -307,15 +307,15 @@ func initNotify(ctx context.Context) error {
 	// warned it stays disabled.
 	cfg := Config()
 	if !telegram && !email && !cfg.Notify.Telegram.Configured() && !cfg.Notify.Email.Configured() {
-		ui.Info("no notification channels selected — configure later with:  rec-deploy config")
+		ui.Info("no notification channels selected — configure later with:  rec-deploy notifications")
 	}
 
 	// There is deliberately no "send a test notification?" question here any
 	// more. It existed because nothing else proved the credentials, and each
 	// channel now proves its own before it is saved — so the question was a
 	// second interaction and two more result lines for an answer the step had
-	// already given. `rec-deploy notify test`, and the config menu's "Send a
-	// test", still deliver a real message on demand.
+	// already given. `rec-deploy notifications test`, and each channel's own
+	// "Send a test", still deliver a real message on demand.
 	return nil
 }
 

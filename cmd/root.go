@@ -122,7 +122,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newServiceCmd())
 	root.AddCommand(newLogsCmd())
-	root.AddCommand(newNotifyCmd())
+	root.AddCommand(newNotificationsCmd())
 	root.AddCommand(newServeCmd())
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newSelfUpdateCmd())
@@ -210,7 +210,8 @@ var hubEntries = []hubEntry{
 	{"status", "daemon, units and discovered checkouts"},
 	{"scan", "show every checkout discovery finds"},
 	{"service", "start, stop or restart the webhook daemon"},
-	{"config", "server, GitHub, discovery and notifications"},
+	{"config", "server, GitHub and discovery settings"},
+	{"notifications", "Telegram and email: settings and test sends"},
 	{"mcp", "remote read-only access for AI clients"},
 	{"self-update", "check for and install a new release"},
 	{"uninstall", "remove rec-deploy from this server"},

@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/rdcstarr/rec-deploy/internal/cloudflare"
@@ -355,5 +359,30 @@ func TestCloudflareMCPProvisionedTracksTheResourcesNotTheSwitch(t *testing.T) {
 	}}
 	if !cloudflareMCPProvisioned(recordOnly) {
 		t.Error("a hostname with no tunnel id is still ours to remove")
+	}
+}
+
+// TestProbeFailureNamesTheCause is the diagnosis this row exists for. Collapsed
+// into one word, a hostname pointing at an address nothing answers on, a host
+// with nothing listening and a record that was never created all read as "the
+// tunnel is down" — which sends the operator to restart a service that was
+// never the problem.
+func TestProbeFailureNamesTheCause(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"no record", &net.DNSError{Err: "no such host", IsNotFound: true}, "no DNS record"},
+		{"resolver down", &net.DNSError{Err: "server misbehaving"}, "DNS lookup failed"},
+		{"deadline", fmt.Errorf("Post %q: %w", "https://x/mcp", context.DeadlineExceeded), "timed out"},
+		{"refused", fmt.Errorf("dial tcp: %w", syscall.ECONNREFUSED), "connection refused"},
+		{"anything else", errors.New("tls: handshake failure"), "connection failed"},
+	}
+
+	for _, tc := range cases {
+		if got := probeFailure(tc.err); got != tc.want {
+			t.Errorf("%s: probeFailure = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

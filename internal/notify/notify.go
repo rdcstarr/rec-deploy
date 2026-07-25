@@ -101,36 +101,44 @@ type ChannelResult struct {
 
 // Deliver renders and sends s to every notification channel and reports each
 // outcome — nothing is silent here. Send wraps it for the deploy path, where
-// failures are logged; `notify test` prints it, which is how an operator sees
-// an SMTP error without journalctl.
+// failures are logged; `notifications test` prints it, which is how an operator
+// sees an SMTP error without journalctl.
 func Deliver(ctx context.Context, cfg config.NotifyConfig, s Summary) []ChannelResult {
-	results := make([]ChannelResult, 0, 2)
-	body := Render(s)
+	return []ChannelResult{DeliverTelegram(ctx, cfg.Telegram, s), DeliverEmail(ctx, cfg.Email, s)}
+}
 
-	if !cfg.Telegram.Configured() {
-		results = append(results, ChannelResult{Channel: "telegram", Skipped: true, Detail: missingTelegram(cfg.Telegram)})
-	} else if err := sendTelegram(ctx, cfg.Telegram, RenderTelegramHTML(s), body); err != nil {
-		results = append(results, ChannelResult{Channel: "telegram", Detail: err.Error(), Err: err})
-	} else {
-		results = append(results, ChannelResult{Channel: "telegram"})
+// DeliverTelegram sends s to Telegram and reports the outcome. It is exported
+// separately from Deliver so a test triggered from the Telegram screen reaches
+// Telegram and nothing else — a probe sent from one channel's settings that
+// also mails somebody is a surprise, not a test.
+func DeliverTelegram(ctx context.Context, cfg config.TelegramConfig, s Summary) ChannelResult {
+	if !cfg.Configured() {
+		return ChannelResult{Channel: "telegram", Skipped: true, Detail: MissingTelegram(cfg)}
+	}
+	if err := sendTelegram(ctx, cfg, RenderTelegramHTML(s), Render(s)); err != nil {
+		return ChannelResult{Channel: "telegram", Detail: err.Error(), Err: err}
 	}
 
-	if !cfg.Email.Configured() {
-		results = append(results, ChannelResult{Channel: "email", Skipped: true, Detail: missingEmail(cfg.Email)})
-	} else {
-		html, err := RenderHTML(s)
-		if err != nil {
-			slog.Error("html rendering failed — sending plain text", "error", err)
-			html = ""
-		}
-		if err := sendEmail(ctx, cfg.Email, Subject(s), body, html); err != nil {
-			results = append(results, ChannelResult{Channel: "email", Detail: err.Error(), Err: err})
-		} else {
-			results = append(results, ChannelResult{Channel: "email"})
-		}
+	return ChannelResult{Channel: "telegram"}
+}
+
+// DeliverEmail sends s by email and reports the outcome. See DeliverTelegram
+// for why the channels are reachable one at a time.
+func DeliverEmail(ctx context.Context, cfg config.EmailConfig, s Summary) ChannelResult {
+	if !cfg.Configured() {
+		return ChannelResult{Channel: "email", Skipped: true, Detail: MissingEmail(cfg)}
 	}
 
-	return results
+	html, err := RenderHTML(s)
+	if err != nil {
+		slog.Error("html rendering failed — sending plain text", "error", err)
+		html = ""
+	}
+	if err := sendEmail(ctx, cfg, Subject(s), Render(s), html); err != nil {
+		return ChannelResult{Channel: "email", Detail: err.Error(), Err: err}
+	}
+
+	return ChannelResult{Channel: "email"}
 }
 
 // Send delivers the summary to every configured channel: journald always,
@@ -150,10 +158,10 @@ func Send(ctx context.Context, cfg config.NotifyConfig, s Summary) {
 	}
 }
 
-// missingTelegram names the unset Telegram fields for a skipped
+// MissingTelegram names the unset Telegram fields for a skipped
 // ChannelResult's Detail — "bot token is not set", "chat id is not set", or
 // "bot token and chat id are not set" when both are empty.
-func missingTelegram(cfg config.TelegramConfig) string {
+func MissingTelegram(cfg config.TelegramConfig) string {
 	var missing []string
 	if cfg.Token == "" {
 		missing = append(missing, "bot token")
@@ -165,9 +173,9 @@ func missingTelegram(cfg config.TelegramConfig) string {
 	return missingDetail(missing)
 }
 
-// missingEmail names the unset email fields for a skipped ChannelResult's
+// MissingEmail names the unset email fields for a skipped ChannelResult's
 // Detail, e.g. "smtp is not set" or "smtp, from and to are not set".
-func missingEmail(cfg config.EmailConfig) string {
+func MissingEmail(cfg config.EmailConfig) string {
 	var missing []string
 	if cfg.SMTP == "" {
 		missing = append(missing, "smtp")

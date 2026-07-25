@@ -13,7 +13,7 @@ import (
 
 // TestPrintChannelResults covers the two outcomes that must never look alike: a
 // skipped channel names its missing fields, and a failed channel carries the
-// send error's text — the failed count is what drives `notify test`'s exit
+// send error's text — the failed count is what drives `notifications test`'s exit
 // code.
 func TestPrintChannelResults(t *testing.T) {
 	var failed int
@@ -55,8 +55,8 @@ func TestPrintChannelResultsAllSent(t *testing.T) {
 }
 
 // TestRunNotifyTestNoConfig is the safe-smoke contract as a test: with no
-// channel configured, `notify test` reports two skipped channels and returns
-// nil — a missing configuration is not itself a failure.
+// channel configured, `notifications test` reports two skipped channels and
+// returns nil — a missing configuration is not itself a failure.
 func TestRunNotifyTestNoConfig(t *testing.T) {
 	previous := cfg
 	cfg = &config.Config{}
@@ -64,7 +64,7 @@ func TestRunNotifyTestNoConfig(t *testing.T) {
 
 	var runErr error
 	out := capture(t, func() {
-		runErr = runNotifyTest(context.Background())
+		runErr = runNotifyTest(context.Background(), "")
 	})
 
 	if runErr != nil {
@@ -72,6 +72,57 @@ func TestRunNotifyTestNoConfig(t *testing.T) {
 	}
 	if strings.Count(out, "not configured") != 2 {
 		t.Errorf("output %q does not report exactly two unconfigured channels", out)
+	}
+}
+
+// TestRunNotifyTestProbesOneChannel is the defect this group was reshaped for:
+// a test opened from the Telegram screen reached Telegram *and* email, so an
+// operator checking one channel notified the other. Each channel now probes
+// itself and nothing else, and an unknown one is an error rather than a
+// silent fan-out.
+func TestRunNotifyTestProbesOneChannel(t *testing.T) {
+	previous := cfg
+	cfg = &config.Config{}
+	defer func() { cfg = previous }()
+
+	for _, channel := range []string{"telegram", "email"} {
+		var runErr error
+		out := capture(t, func() {
+			runErr = runNotifyTest(context.Background(), channel)
+		})
+
+		if runErr != nil {
+			t.Fatalf("runNotifyTest(%q): %v", channel, runErr)
+		}
+		if strings.Count(out, "not configured") != 1 || !strings.Contains(out, channel) {
+			t.Errorf("a %s test reported %q, want that channel alone", channel, out)
+		}
+	}
+
+	var runErr error
+	capture(t, func() { runErr = runNotifyTest(context.Background(), "carrier-pigeon") })
+	if runErr == nil {
+		t.Error("an unknown channel silently probed something instead of failing")
+	}
+}
+
+// TestChannelStateDescribesEveryListedChannel keeps the hub honest: each entry
+// in notifyChannels says whether it is live and, when it is not, which field is
+// missing — a blank line beside a channel name tells the operator nothing.
+func TestChannelStateDescribesEveryListedChannel(t *testing.T) {
+	unset := &config.Config{}
+	set := &config.Config{Notify: config.NotifyConfig{
+		Telegram: config.TelegramConfig{Token: "t", ChatID: "1"},
+		Email:    config.EmailConfig{SMTP: "smtp.example.com:587", From: "a@example.com", To: "b@example.com"},
+	}}
+
+	for _, channel := range notifyChannels {
+		if state := channelState(unset, channel.Key); !strings.Contains(state, "not set") {
+			t.Errorf("%s unconfigured reads %q, want the missing fields named", channel.Key, state)
+		}
+		if state := channelState(set, channel.Key); state != "configured" {
+			t.Errorf("%s configured reads %q, want \"configured\"", channel.Key, state)
+		}
 	}
 }
 
