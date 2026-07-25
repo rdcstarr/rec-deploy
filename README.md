@@ -387,7 +387,7 @@ rec-deploy repo remove <owner/repo>     # deletes the key and the hook on GitHub
 rec-deploy repo rotate <owner/repo>     # roll the HMAC secret and the deploy key
 rec-deploy repo install <owner/repo> <path>   # clone into path as its owner
 
-rec-deploy deploy <owner/repo> [--path P]     # deploy now; full output in rec-deploy logs
+rec-deploy deploy <owner/repo> [--path P]     # deploy now; command output in rec-deploy logs
 rec-deploy rollback <owner/repo> [--path P]   # back to the previous SHA
 rec-deploy scan                         # what discovery finds, and why
 rec-deploy status                       # daemon health, repos, last deploy per path
@@ -421,8 +421,9 @@ clears when it is done, so a slow network call never looks like a freeze. A depl
 exception: the git around it (`clone`, `fetch`, `reset`, `clean`) and the `post_deploy`
 pipeline both run quietly under spinners, and the terminal shows only the per-checkout
 result line — that chatter is machinery, not a result. When a step fails, its own message
-travels in the failure reason as a one-line cause, while the full output of every command,
-failed or not, stays in `rec-deploy logs`.
+travels in the failure reason as a one-line cause, while the captured output of every
+command, failed or not — the last several kilobytes, as `rec-deploy` records for every
+step — stays in `rec-deploy logs`.
 
 The bare `rec-deploy` hub above is curated, not exhaustive: `deploy`, `repo`, `logs`,
 `status`, `scan`, `service`, `config`, `mcp`, `self-update` and `uninstall`, plus `init`
