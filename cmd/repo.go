@@ -64,7 +64,7 @@ func repoMenu(cmd *cobra.Command) error {
 // walks from, so starting at repo would build "repo deploy" — an argument list
 // cobra cannot find. They live on the root because that is where an operator
 // types them; the menu is where they are reached from.
-var repoRootCommands = map[string]bool{"deploy": true, "scan": true, "rollback": true}
+var repoRootCommands = map[string]bool{"deploy": true, "config": true, "scan": true, "rollback": true}
 
 // repoDispatchFrom resolves which command dispatch should walk from for one
 // repo-menu choice. Pulling this out of Handle as its own function is what lets
@@ -79,11 +79,12 @@ func repoDispatchFrom(cmd *cobra.Command, choice string) *cobra.Command {
 }
 
 // repoMenuOptions lists what an operator does to a repository: the deploy they
-// came for first, then registration and inspection, ending with the two that
-// undo work.
+// came for first, then the settings every other entry runs against,
+// registration and inspection, ending with the two that undo work.
 func repoMenuOptions() []ui.Option {
 	return ui.DescribedOptions(
 		ui.DescribedOption{Name: "deploy", Description: "deploy a repository now", Value: "deploy"},
+		ui.DescribedOption{Name: "config", Description: "server, GitHub and discovery settings", Value: "config"},
 		ui.DescribedOption{Name: "add", Description: "register a repository: deploy key + webhook", Value: "add"},
 		ui.DescribedOption{Name: "list", Description: "every registered repository", Value: "list"},
 		ui.DescribedOption{Name: "show", Description: "one repository and its installations", Value: "show"},

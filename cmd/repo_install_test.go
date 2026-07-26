@@ -89,8 +89,8 @@ func TestCloneDestinationEntriesIncludesHiddenDirectories(t *testing.T) {
 }
 
 // TestRepoMenuRoutesEveryChoice pins what the repo menu offers and that each
-// choice resolves against the right command: deploy, scan and rollback are
-// root-level commands, not children of repo, and repo's Handle has to dispatch
+// choice resolves against the right command: deploy, config, scan and rollback
+// are root-level commands, not children of repo, and repo's Handle has to dispatch
 // them from cmd.Root() or the choice fails to resolve. The table also pins
 // every other entry to repo itself, so a routing regression on any of them
 // fails here too, and its length is checked against repoMenuOptions() so the
@@ -106,6 +106,7 @@ func TestRepoMenuRoutesEveryChoice(t *testing.T) {
 	// value -> dispatches from root (true) or from repo itself (false).
 	routing := map[string]bool{
 		"deploy":   true,
+		"config":   true,
 		"add":      false,
 		"list":     false,
 		"show":     false,

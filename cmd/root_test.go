@@ -25,6 +25,7 @@ func TestEveryCommandIsReachable(t *testing.T) {
 	// Reachable from a group menu rather than from the hub.
 	nested := map[string]string{
 		"deploy":   "repo",
+		"config":   "repo",
 		"scan":     "repo",
 		"rollback": "repo",
 	}
@@ -100,9 +101,9 @@ func TestHubOmitsPlumbingAndTheDaemon(t *testing.T) {
 		t.Error("hub is missing the uninstall command")
 	}
 
-	// deploy and scan are repository work and are reached from the repo menu;
-	// listing them here too would put the same command on two screens.
-	for _, rehomed := range []string{"deploy", "scan"} {
+	// deploy, config and scan are reached from the repo menu; listing them here
+	// too would put the same command on two screens.
+	for _, rehomed := range []string{"deploy", "config", "scan"} {
 		if seen[rehomed] {
 			t.Errorf("hub still lists %q — it belongs to the repo menu", rehomed)
 		}
