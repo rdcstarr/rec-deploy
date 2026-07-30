@@ -22,6 +22,14 @@ func keyPress(chord string) tea.KeyMsg {
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "esc":
 		return tea.KeyPressMsg{Code: tea.KeyEsc}
+	case "space":
+		// A terminal does send Text for the space bar, and Key.String still
+		// reports "space": it refuses to return a Text of " " and falls back to
+		// the key name. v1 spelled this chord " ", which is why document.go's
+		// paging arm went dead on the v2 bump.
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	case "pgdown":
+		return tea.KeyPressMsg{Code: tea.KeyPgDown}
 	case "ctrl+c":
 		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	}
@@ -40,7 +48,7 @@ func keyPress(chord string) tea.KeyMsg {
 // strings navigationKey switches on, so a test written against a chord name
 // exercises the same path a real keystroke does.
 func TestKeyPressMatchesTheNavigationContract(t *testing.T) {
-	for _, chord := range []string{"up", "down", "left", "enter", "esc", "ctrl+c", "q", "h", "alt+r", "®"} {
+	for _, chord := range []string{"up", "down", "left", "enter", "esc", "space", "pgdown", "ctrl+c", "q", "h", "alt+r", "®"} {
 		if got := keyPress(chord).String(); got != chord {
 			t.Errorf("keyPress(%q).String() = %q, want %q", chord, got, chord)
 		}

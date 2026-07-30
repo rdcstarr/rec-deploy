@@ -103,8 +103,14 @@ type formModel struct {
 	revealed bool
 }
 
-// Init implements tea.Model.
-func (m formModel) Init() tea.Cmd { return m.form.Init() }
+// Init implements tea.Model. It asks the terminal for its background color
+// because huh's theme is resolved per render from that answer: without the
+// query the form never receives a tea.BackgroundColorMsg, huh's hasDarkBg stays
+// false and every terminal gets the light palette. huh's own Form.Init requests
+// only the window size, so this has to be added here.
+func (m formModel) Init() tea.Cmd {
+	return tea.Batch(m.form.Init(), tea.RequestBackgroundColor)
+}
 
 // Update implements tea.Model: it claims the back and quit chords and otherwise
 // delegates to the wrapped form, quitting once the form is no longer running.

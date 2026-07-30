@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
@@ -77,6 +78,55 @@ func TestCompletedFormRendersNothing(t *testing.T) {
 	}
 	if view := model.View().Content; view != "" {
 		t.Errorf("completed form rendered %q, want an empty frame so nothing is left behind", view)
+	}
+}
+
+// TestFormRequestsTheTerminalBackground pins the wiring huh's theme depends on.
+// huh v2 resolves ThemeCharm per render from its hasDarkBg flag, which is only
+// ever set by a tea.BackgroundColorMsg, and that message only arrives if
+// something asks for it — huh's own Form.Init asks for the window size and
+// nothing else. Without the request every terminal silently gets the light
+// palette: the field title renders the light indigo #5A56E0 instead of #7571F9
+// and descriptions lose their grey entirely.
+func TestFormRequestsTheTerminalBackground(t *testing.T) {
+	build := func() formModel {
+		f := huh.NewForm(huh.NewGroup(newInput("Token", "paste it here").Value(new(string)))).
+			WithTheme(huh.ThemeFunc(huh.ThemeCharm)).
+			WithKeyMap(formKeyMap())
+		f.Init()
+
+		return formModel{form: f, footer: formFooter(false, false)}
+	}
+
+	msg := build().Init()()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("Init produced %T, want a tea.BatchMsg carrying the background request", msg)
+	}
+	requested := false
+	for _, cmd := range batch {
+		if cmd != nil && cmd() == tea.RequestBackgroundColor() {
+			requested = true
+		}
+	}
+	if !requested {
+		t.Error("Init does not request the terminal background color; huh would render the light theme everywhere")
+	}
+
+	// The request is only half of it — the answer has to reach huh's fields.
+	const lightIndigo, darkIndigo = "38;2;90;86;224", "38;2;117;113;249"
+
+	if view := build().View().Content; !strings.Contains(view, lightIndigo) {
+		t.Errorf("a form with no background answer did not render the light indigo:\n%q", view)
+	}
+
+	answered, _ := build().Update(tea.BackgroundColorMsg{Color: color.Black})
+	view := answered.(formModel).View().Content
+	if !strings.Contains(view, darkIndigo) {
+		t.Errorf("a dark terminal background did not reach the theme — still the light palette:\n%q", view)
+	}
+	if strings.Contains(view, lightIndigo) {
+		t.Errorf("the light indigo survived a dark background:\n%q", view)
 	}
 }
 

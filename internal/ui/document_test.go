@@ -43,6 +43,39 @@ func TestDocumentScrolls(t *testing.T) {
 	}
 }
 
+// TestDocumentPagesWithSpace pins that the space bar pages the body like PgDn.
+// Bubble Tea v1 stringified the space bar as " " and v2 names it "space", so the
+// paging arm silently matched nothing after the v2 bump: space still redrew the
+// same window and the logs browser lost its most-used scroll key with every test
+// still green.
+func TestDocumentPagesWithSpace(t *testing.T) {
+	SetColor(false)
+
+	lines := make([]string, 60)
+	for i := range lines {
+		lines[i] = "line-" + strconv.Itoa(i)
+	}
+
+	var m tea.Model = documentModel{Document: Document{Title: "output", Body: strings.Join(lines, "\n")}}
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+
+	paged, _ := m.Update(keyPress("space"))
+	if top := paged.(documentModel).top; top == 0 {
+		t.Fatal("space did not page the body — the window never left the top")
+	}
+
+	// A page is exactly what PgDn moves, so the two keys must land identically.
+	pgdn, _ := m.Update(keyPress("pgdown"))
+	if got, want := paged.(documentModel).top, pgdn.(documentModel).top; got != want {
+		t.Errorf("space moved to line %d, PgDn to %d — they must page by the same amount", got, want)
+	}
+
+	view := paged.(documentModel).View().Content
+	if strings.Contains(view, "line-0\n") {
+		t.Errorf("the body did not scroll after space:\n%s", view)
+	}
+}
+
 // TestDocumentUnsizedBodyKeepsTrailingNewline pins that an unsized document
 // renders its title block followed by exactly Body + "\n" — lines() trims the
 // body's trailing newline for windowing math, and that trim must not leak into

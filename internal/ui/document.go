@@ -70,7 +70,7 @@ func (m documentModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.top++
 	case "up", "k":
 		m.top--
-	case "pgdown", " ":
+	case "pgdown", "space":
 		m.top += m.bodyRows()
 	case "pgup":
 		m.top -= m.bodyRows()
