@@ -12,14 +12,17 @@ import (
 	"golang.org/x/term"
 )
 
-// Out writes a line to stdout — the user-facing output channel.
+// Out writes a line to stdout — the user-facing output channel. It writes
+// through lipgloss so styled text is downsampled to what the terminal can
+// actually show: since v2, that reduction happens at write time, not inside
+// Style.Render.
 func Out(s string) {
-	fmt.Fprintln(os.Stdout, s)
+	_, _ = lipgloss.Fprintln(os.Stdout, s)
 }
 
-// Outf writes a formatted line to stdout.
+// Outf writes a formatted line to stdout, downsampled like Out.
 func Outf(format string, a ...any) {
-	fmt.Fprintf(os.Stdout, format+"\n", a...)
+	_, _ = lipgloss.Fprintln(os.Stdout, fmt.Sprintf(format, a...))
 }
 
 // Title prints a bold, highlighted title line.

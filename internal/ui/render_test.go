@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -28,5 +29,22 @@ func TestTwoColWidthWrapsLongRows(t *testing.T) {
 	}
 	if !strings.Contains(out, "\n") {
 		t.Errorf("long row did not wrap: %q", out)
+	}
+}
+
+// TestOutDownsamplesToTheTerminalProfile pins that styled output goes through
+// lipgloss's writer, which strips or reduces colour the terminal cannot show.
+// lipgloss v2 downsamples at write time, not in Render, so a plain
+// fmt.Fprintln would leak truecolor sequences onto a 16-colour console.
+func TestOutDownsamplesToTheTerminalProfile(t *testing.T) {
+	SetColor(true)
+	defer SetColor(false)
+
+	var buf bytes.Buffer
+	if _, err := lipgloss.Fprintln(&buf, render(StyleTitle, "title")); err != nil {
+		t.Fatalf("Fprintln: %v", err)
+	}
+	if strings.Contains(buf.String(), "\x1b[38;2;") {
+		t.Errorf("truecolor sequence survived downsampling to a non-tty: %q", buf.String())
 	}
 }
