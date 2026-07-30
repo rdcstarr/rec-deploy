@@ -265,11 +265,12 @@ func TestPickerFrameFitsTheTerminal(t *testing.T) {
 
 	for _, callerHelp := range []string{"", strings.Join(oversized, "\n")} {
 		for _, showHelp := range []bool{false, true} {
-			// Five rows is the floor for every view in this package: a title,
-			// its blank line, one row of content, and a footer with its own
-			// blank line. Below that nothing can be drawn without dropping the
-			// title or the footer, so the sweep stops there.
-			for height := 5; height <= 40; height++ {
+			// Five rows is the floor a picker can *fit*: a title, its blank
+			// line, one option, and a footer with its own blank line. Below it
+			// there is no arithmetic that helps, so clampFrame crops the frame
+			// to the terminal — and the sweep goes all the way down to one row
+			// to hold it to that.
+			for height := 1; height <= 40; height++ {
 				for n := 1; n <= height+2; n++ {
 					opts := make([]Option, n)
 					for i := range opts {

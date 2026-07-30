@@ -132,7 +132,9 @@ func frameHeight(view string) int {
 func TestDocumentFrameFitsTheTerminal(t *testing.T) {
 	SetColor(false)
 
-	for height := 6; height <= 40; height++ {
+	// One row up: below five a document cannot fit a title, a body line and a
+	// footer at once, and clampFrame crops the frame instead of fitting it.
+	for height := 1; height <= 40; height++ {
 		for n := 1; n <= height+2; n++ {
 			lines := make([]string, n)
 			for i := range lines {

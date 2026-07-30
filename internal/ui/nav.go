@@ -115,7 +115,43 @@ func frameEnd(height int) string {
 	return ""
 }
 
-// clampLines truncates a pre-rendered block to at most max lines, keeping the
+// clampFrame truncates an assembled frame to its last height rows, so no view
+// in this package can hand Bubble Tea v2 more rows than the terminal has —
+// whatever its own arithmetic did.
+//
+// The arithmetic is what keeps a frame inside the terminal, and it still does
+// the work: this finds nothing to do whenever a view fitted itself properly. It
+// exists because the failure mode of getting that arithmetic wrong is not a
+// cosmetic one. v2's renderer gates its "unchanged frame, nothing to write"
+// check on the frame area matching a screen buffer it has already truncated to
+// the terminal height; once a frame overflows, the two can never match again
+// and it repaints a byte-identical screen at full framerate with no input at
+// all — a CPU spin on an idle terminal. Below five rows no view here can fit a
+// title, a row of content and a footer at once, so there the overflow is not a
+// mistake to be corrected but a geometry to be cropped.
+//
+// It keeps the last rows rather than the first, which is what Bubble Tea v1 did
+// with an oversized frame (standard_renderer.go: newLines[len(newLines)-r.height:]).
+// The footer carries the keys the operator needs to leave the screen, so the
+// title is what goes when only one of them can stay.
+//
+// It wraps frameEnd, never the other way round: frameEnd decides whether a
+// frame's last line opens a further row, so clamping first would let it push
+// the frame back over the height by one.
+func clampFrame(content string, height int) string {
+	if height <= 0 {
+		return content
+	}
+
+	lines := strings.Split(content, "\n")
+	if len(lines) <= height {
+		return content
+	}
+
+	return strings.Join(lines[len(lines)-height:], "\n")
+}
+
+// clampLines truncates a pre-rendered block to at most limit lines, keeping the
 // trailing newline the callers build their frames around. It is the other half
 // of frameEnd: windowing the content a view owns cannot bring an oversized
 // frame back inside the terminal when the block *below* that content is itself

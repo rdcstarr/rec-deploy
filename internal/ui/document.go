@@ -106,7 +106,7 @@ func (m documentModel) View() tea.View {
 	b.WriteString(body)
 	b.WriteString("\n" + render(StyleSubtle, footer) + frameEnd(m.height))
 
-	return tea.NewView(b.String())
+	return tea.NewView(clampFrame(b.String(), m.height))
 }
 
 // lines is the body split for scrolling. It is recomputed per redraw rather than

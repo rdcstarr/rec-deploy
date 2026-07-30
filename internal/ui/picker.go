@@ -357,7 +357,7 @@ func (m pickerModel) View() tea.View {
 	b.WriteString(m.helpBlock())
 	b.WriteString("\n" + render(StyleSubtle, m.help()) + frameEnd(m.height))
 
-	return tea.NewView(b.String())
+	return tea.NewView(clampFrame(b.String(), m.height))
 }
 
 // exitKey reports whether s is one of the picker's exit Keys.

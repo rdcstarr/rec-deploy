@@ -149,17 +149,15 @@ func (m detailModel) View() tea.View {
 	// terminal to hold is empty, and the footer stands in for it.
 	if block := m.helpBlock(); block != "" {
 		b.WriteString("\n" + strings.TrimSuffix(block, "\n") + frameEnd(m.height))
-
-		return tea.NewView(b.String())
+	} else {
+		footer := m.help()
+		if scroll != "" {
+			footer = "↑/↓ scroll • " + footer + scroll
+		}
+		b.WriteString("\n" + render(StyleSubtle, footer) + frameEnd(m.height))
 	}
 
-	footer := m.help()
-	if scroll != "" {
-		footer = "↑/↓ scroll • " + footer + scroll
-	}
-	b.WriteString("\n" + render(StyleSubtle, footer) + frameEnd(m.height))
-
-	return tea.NewView(b.String())
+	return tea.NewView(clampFrame(b.String(), m.height))
 }
 
 // rowsBlock is the two-column body, sized to the terminal once a WindowSizeMsg

@@ -32,6 +32,11 @@ func (d SecretDetail) Run() error {
 
 type secretDetailModel struct {
 	SecretDetail
+	// height is tracked only so clampFrame can crop. This view renders one
+	// value and is six rows tall whatever the terminal does, so it has no
+	// windowing to do and nothing to fit; below six rows there is simply not
+	// room for it, and the frame has to be cropped rather than made smaller.
+	height   int
 	revealed bool
 	closing  bool
 	quit     bool
@@ -40,6 +45,11 @@ type secretDetailModel struct {
 func (m secretDetailModel) Init() tea.Cmd { return nil }
 
 func (m secretDetailModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if size, ok := msg.(tea.WindowSizeMsg); ok {
+		m.height = size.Height
+
+		return m, nil
+	}
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
@@ -73,5 +83,5 @@ func (m secretDetailModel) View() tea.View {
 	b.WriteString(render(StyleTitle, m.Title) + "\n\n")
 	b.WriteString(TwoCol([][2]string{{m.Label, value}}))
 	b.WriteString("\n" + render(StyleSubtle, "⌥R "+action+" • enter/"+navigationFooter(navigationDetail)) + "\n")
-	return tea.NewView(b.String())
+	return tea.NewView(clampFrame(b.String(), m.height))
 }
