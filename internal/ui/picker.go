@@ -273,9 +273,12 @@ type statsTimeoutMsg struct {
 	generation int
 }
 
-// matchesPickerKey accepts Bubble Tea's Alt chord and the character macOS
-// terminals emit for Option+R when Option is not configured as Meta. A plain r
-// never matches the sensitive reveal chord.
+// matchesPickerKey accepts the chord the terminal reports — v2's KeyPressMsg
+// carries the Alt modifier, so String() renders "alt+r" whenever the terminal
+// (or its Kitty keyboard protocol support) reports it — and, as a fallback,
+// the character macOS terminals emit for Option+R when Option is not
+// configured as Meta and no modifier is reported at all. A plain r never
+// matches the sensitive reveal chord.
 func matchesPickerKey(got, configured string) bool {
 	return got == configured || (configured == "alt+r" && got == "®")
 }
