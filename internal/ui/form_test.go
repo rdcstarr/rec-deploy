@@ -16,10 +16,10 @@ import (
 func TestFormKeymapAddsArrowNavigation(t *testing.T) {
 	km := formKeyMap()
 
-	if !key.Matches(tea.KeyMsg{Type: tea.KeyDown}, km.Input.Next) {
+	if !key.Matches(keyPress("down"), km.Input.Next) {
 		t.Error("down should move to the next field")
 	}
-	if !key.Matches(tea.KeyMsg{Type: tea.KeyUp}, km.Input.Prev) {
+	if !key.Matches(keyPress("up"), km.Input.Prev) {
 		t.Error("up should move to the previous field")
 	}
 }
@@ -69,7 +69,7 @@ func TestCompletedFormRendersNothing(t *testing.T) {
 
 	// Enter submits the single-field form, which is what sets huh's own quitting
 	// guard and makes Form.View() empty.
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := model.Update(keyPress("enter"))
 	model = pump(t, next.(formModel), cmd)
 
 	if f.State == huh.StateNormal {
@@ -148,12 +148,12 @@ func TestSecretFieldRevealTogglesInPlace(t *testing.T) {
 	if view := model.View(); strings.Contains(view, value) {
 		t.Fatalf("secret starts revealed:\n%s", view)
 	}
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r"), Alt: true})
+	next, _ := model.Update(keyPress("alt+r"))
 	model = next.(formModel)
 	if view := model.View(); !strings.Contains(view, value) {
 		t.Errorf("Alt+R did not reveal the input:\n%s", view)
 	}
-	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r"), Alt: true})
+	next, _ = model.Update(keyPress("alt+r"))
 	model = next.(formModel)
 	if view := model.View(); strings.Contains(view, value) {
 		t.Errorf("second Alt+R did not mask the input:\n%s", view)
@@ -193,12 +193,12 @@ func TestFormBackOutIsDistinctFromQuit(t *testing.T) {
 		return f
 	}
 
-	esc, _ := formModel{form: form()}.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	esc, _ := formModel{form: form()}.Update(keyPress("esc"))
 	if got := esc.(formModel).nav; got != navBack {
 		t.Errorf("Esc set nav = %v, want navBack — a back-out, mapped to ui.ErrBack", got)
 	}
 
-	quit, _ := formModel{form: form()}.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	quit, _ := formModel{form: form()}.Update(keyPress("ctrl+c"))
 	if got := quit.(formModel).nav; got != navQuit {
 		t.Errorf("Ctrl+C set nav = %v, want navQuit — mapped to ui.ErrQuit", got)
 	}

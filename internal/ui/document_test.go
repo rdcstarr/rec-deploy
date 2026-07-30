@@ -31,7 +31,7 @@ func TestDocumentScrolls(t *testing.T) {
 	}
 
 	for i := 0; i < 50; i++ {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m, _ = m.Update(keyPress("down"))
 	}
 
 	view = m.(documentModel).View()

@@ -3,8 +3,6 @@ package ui
 import (
 	"strings"
 	"testing"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestDetailViewRendersOneBreadcrumbAndRows(t *testing.T) {
@@ -16,15 +14,15 @@ func TestDetailViewRendersOneBreadcrumbAndRows(t *testing.T) {
 }
 
 func TestDetailNavigation(t *testing.T) {
-	model, cmd := (detailModel{}).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, cmd := (detailModel{}).Update(keyPress("enter"))
 	if cmd == nil || !model.(detailModel).closing || model.(detailModel).quit {
 		t.Error("enter did not navigate back cleanly")
 	}
-	model, cmd = (detailModel{}).Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model, cmd = (detailModel{}).Update(keyPress("esc"))
 	if cmd == nil || !model.(detailModel).closing || model.(detailModel).quit {
 		t.Error("escape did not navigate back cleanly")
 	}
-	model, cmd = (detailModel{}).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model, cmd = (detailModel{}).Update(keyPress("ctrl+c"))
 	if cmd == nil || !model.(detailModel).quit {
 		t.Error("ctrl+c did not quit")
 	}
@@ -35,13 +33,13 @@ func TestDetailNavigation(t *testing.T) {
 func TestDetailActionKeysExitWithTheKey(t *testing.T) {
 	d := Detail{Keys: []Key{{Key: "s", Help: "restart service"}}}
 
-	model, cmd := (detailModel{Detail: d}).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	model, cmd := (detailModel{Detail: d}).Update(keyPress("s"))
 	if cmd == nil || model.(detailModel).key != "s" || !model.(detailModel).closing {
 		t.Errorf("s did not exit as an action key: %+v", model)
 	}
 
 	// An unbound key is inert, and h stays the help toggle.
-	model, cmd = (detailModel{Detail: d}).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	model, cmd = (detailModel{Detail: d}).Update(keyPress("x"))
 	if cmd != nil || model.(detailModel).key != "" {
 		t.Error("an unbound key exited the view")
 	}

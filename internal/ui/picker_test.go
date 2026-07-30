@@ -33,7 +33,7 @@ func TestPickerActionReordersAndFollowsCursor(t *testing.T) {
 
 	m := pickerModel{Picker: Picker{Options: opts, Action: act}, cursor: 2} // on "c"
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	next, _ := m.Update(keyPress("f"))
 	got := next.(pickerModel)
 
 	if got.Options[0].Value != "c" {
@@ -52,7 +52,7 @@ func TestPickerExitKeyReportsKey(t *testing.T) {
 
 	m := pickerModel{Picker: p, cursor: 1} // on "b"
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	next, _ := m.Update(keyPress("e"))
 	got := next.(pickerModel)
 
 	if got.key != "e" {
@@ -72,12 +72,12 @@ func TestPickerStatsRequiresExactAltChord(t *testing.T) {
 	stats := &Stats{Key: "alt+r", Help: "reveal"}
 	m := pickerModel{Picker: Picker{Options: []Option{{Label: "secret", Value: "secret"}}, Stats: stats}}
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	next, _ := m.Update(keyPress("r"))
 	if next.(pickerModel).showStats {
 		t.Fatal("plain r revealed stats bound to Alt+R")
 	}
 
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r"), Alt: true})
+	next, _ = m.Update(keyPress("alt+r"))
 	if !next.(pickerModel).showStats {
 		t.Fatal("Alt+R did not reveal stats")
 	}
@@ -88,9 +88,9 @@ func TestPickerStatsRequiresExactAltChord(t *testing.T) {
 		t.Fatal("stats stayed revealed after their timeout")
 	}
 
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r"), Alt: true})
+	next, _ = m.Update(keyPress("alt+r"))
 	revealed = next.(pickerModel)
-	next, _ = revealed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("®")})
+	next, _ = revealed.Update(keyPress("®"))
 	if next.(pickerModel).showStats {
 		t.Fatal("macOS Option+R character did not toggle stats back off")
 	}
@@ -120,7 +120,7 @@ func TestPickerScrollsToKeepTheCursorVisible(t *testing.T) {
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
 
 	for i := 0; i < 20; i++ {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m, _ = m.Update(keyPress("down"))
 	}
 
 	view := m.(pickerModel).View()
@@ -179,7 +179,7 @@ func TestPickerTruncatesRowsToTerminalWidth(t *testing.T) {
 func TestPickerBackOutIsDistinctFromQuit(t *testing.T) {
 	opts := []Option{{Label: "a", Value: "a"}, {Label: "b", Value: "b"}}
 
-	esc, _ := pickerModel{Picker: Picker{Options: opts}}.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	esc, _ := pickerModel{Picker: Picker{Options: opts}}.Update(keyPress("esc"))
 	back := esc.(pickerModel)
 	if back.quit {
 		t.Error("Esc set the quit flag; Run would return ErrQuit instead of a back-out")
@@ -188,7 +188,7 @@ func TestPickerBackOutIsDistinctFromQuit(t *testing.T) {
 		t.Errorf("Esc = {chosen:%q err:%v}, want an empty value and no error", back.chosen, back.err)
 	}
 
-	quit, _ := pickerModel{Picker: Picker{Options: opts}}.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	quit, _ := pickerModel{Picker: Picker{Options: opts}}.Update(keyPress("ctrl+c"))
 	if !quit.(pickerModel).quit {
 		t.Error("Ctrl+C did not set the quit flag; Run would not return ErrQuit")
 	}
