@@ -145,9 +145,10 @@ func (m detailModel) View() tea.View {
 
 	// The help block replaces the footer rather than joining it, and carries its
 	// own trailing newline; frameEnd owns that last row instead, so a sized view
-	// stops one row short of the height it was given.
-	if m.showHelp {
-		b.WriteString("\n" + strings.TrimSuffix(m.helpBlock(), "\n") + frameEnd(m.height))
+	// stops one row short of the height it was given. A block too big for the
+	// terminal to hold is empty, and the footer stands in for it.
+	if block := m.helpBlock(); block != "" {
+		b.WriteString("\n" + strings.TrimSuffix(block, "\n") + frameEnd(m.height))
 
 		return tea.NewView(b.String())
 	}
@@ -197,14 +198,16 @@ func (m detailModel) bodyRows() int {
 }
 
 // chromeLines is how many rows View writes around the body: the title, the
-// blank line under it, and the footer with its own blank line — or, when help
-// is open, that blank line plus the help block, which replaces the footer.
+// blank line under it, and the footer with its own blank line — or, when a help
+// block is being shown, that blank line plus the block, which replaces the
+// footer.
 func (m detailModel) chromeLines() int {
-	if !m.showHelp {
+	block := m.helpBlock()
+	if block == "" {
 		return 4
 	}
 
-	return 3 + strings.Count(m.helpBlock(), "\n")
+	return 3 + strings.Count(block, "\n")
 }
 
 // clamp keeps the window inside the body after a scroll or a resize.
@@ -239,37 +242,47 @@ func (m detailModel) help() string {
 }
 
 // helpBlock is the panel h toggles: the caller's own help when it supplied one,
-// otherwise this view's keybindings — clamped to the rows the terminal has
-// left, because chromeLines counts this block and bodyRows bottoms out at one
-// line, so a block taller than the terminal would overflow the frame no matter
-// how far the rows are windowed.
+// otherwise this view's keybindings. It is the single source of truth for the
+// block — empty when help is closed or when it cannot be shown — so chromeLines
+// measures exactly what View writes, which is where the original overflow came
+// from.
 func (m detailModel) helpBlock() string {
-	if m.Help != "" {
-		return clampLines(m.Help+"\n", m.helpBudget())
+	if !m.showHelp {
+		return ""
 	}
 
-	rows := make([][2]string, 0, len(m.Keys)+3)
-	for _, k := range m.Keys {
-		rows = append(rows, [2]string{k.Key, k.Help})
+	block := m.Help + "\n"
+	if m.Help == "" {
+		rows := make([][2]string, 0, len(m.Keys)+3)
+		for _, k := range m.Keys {
+			rows = append(rows, [2]string{k.Key, k.Help})
+		}
+		rows = append(rows, [2]string{"enter / esc / ←", "back"}, [2]string{"q / ctrl+c", "quit"})
+		block = HelpPanel("keys", rows, nil)
 	}
-	rows = append(rows, [2]string{"enter / esc / ←", "back"}, [2]string{"q / ctrl+c", "quit"})
 
-	return clampLines(HelpPanel("keys", rows, nil), m.helpBudget())
+	// An unsized view — no WindowSizeMsg yet, as in a test — is fitting nothing.
+	if m.height <= 0 {
+		return block
+	}
+
+	// One row buys nothing but the notice that everything was dropped, so below
+	// two the block goes entirely and View falls back to its footer: a help
+	// panel that cannot fit is not help.
+	budget := m.helpBudget()
+	if budget < 2 {
+		return ""
+	}
+
+	return clampLines(block, budget)
 }
 
-// helpBudget is how many lines the help block may occupy: what the terminal has
-// left once the title, the blank line under it, one body line and the block's
-// own leading blank line are accounted for. Zero means the height is unknown —
-// no WindowSizeMsg has arrived, as in a test — and the block is rendered whole.
+// helpBudget is how many lines the help block may occupy on a sized view: at
+// most half the terminal, and never more than what is left once the title, the
+// blank line under it, one body line and the block's own leading blank line are
+// accounted for. Half is the same deliberate cap the picker makes — a block
+// that displaces the rows it is describing is a bad trade — and the fit term
+// still governs small terminals, where it is the smaller of the two.
 func (m detailModel) helpBudget() int {
-	if m.height <= 0 {
-		return 0
-	}
-
-	budget := m.height - 4
-	if budget < 1 {
-		return 1
-	}
-
-	return budget
+	return min(m.height-4, m.height/2)
 }

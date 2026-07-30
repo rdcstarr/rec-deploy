@@ -239,14 +239,9 @@ func (m pickerModel) listRows() int {
 
 // chromeLines is how many lines View writes around the option rows: the title,
 // the blank line under it, and the footer with its own blank line — plus the
-// help block whenever it is open.
+// help block, which is empty unless it is both open and able to fit.
 func (m pickerModel) chromeLines() int {
-	lines := 4
-	if m.showHelp {
-		lines += strings.Count(m.helpBlock(), "\n")
-	}
-
-	return lines
+	return 4 + strings.Count(m.helpBlock(), "\n")
 }
 
 // visible is the half-open range of options the current window shows.
@@ -260,35 +255,48 @@ func (m pickerModel) visible() (start, end int) {
 }
 
 // helpBlock is what View appends when help is toggled: the caller's own help
-// when it supplied one, otherwise this picker's keybindings — clamped to the
-// rows the terminal has left, because chromeLines counts this block and
-// listRows bottoms out at one option, so a block taller than the terminal would
-// overflow the frame no matter how far the list is windowed.
+// when it supplied one, otherwise this picker's keybindings. It is the single
+// source of truth for the block — empty when help is closed or when it cannot
+// be shown — so chromeLines measures exactly what View writes, which is where
+// the original overflow came from.
 func (m pickerModel) helpBlock() string {
+	if !m.showHelp {
+		return ""
+	}
+
 	block := HelpPanel("Keys", m.helpRows(), nil)
 	if m.Help != "" {
 		block = m.Help + "\n"
 	}
 
-	return "\n" + clampLines(block, m.helpBudget())
+	// An unsized view — no WindowSizeMsg yet, as in a test — is fitting nothing.
+	if m.height <= 0 {
+		return "\n" + block
+	}
+
+	// One row buys nothing but the notice that everything was dropped, so below
+	// two the block goes entirely: a help panel that cannot fit is not help, and
+	// h on a tiny terminal is better answered with the list than with a stub.
+	budget := m.helpBudget()
+	if budget < 2 {
+		return ""
+	}
+
+	return "\n" + clampLines(block, budget)
 }
 
-// helpBudget is how many lines the help block may occupy: what the terminal has
-// left once the title, the blank line under it, one option row, the block's own
-// leading blank line and the footer with its own blank line are accounted for.
-// Zero means the height is unknown — no WindowSizeMsg has arrived, as in a
-// test — and the block is rendered whole.
+// helpBudget is how many lines the help block may occupy on a sized picker: at
+// most half the terminal, and never more than what is left once the title, the
+// blank line under it, one option row, the block's own leading blank line and
+// the footer with its own blank line are accounted for.
+//
+// Half is a deliberate cap rather than a fit. cmd/help.go's block opens with
+// the very command list the menu underneath it is showing, so letting it take
+// eighteen of twenty-four rows spends the screen re-rendering what it hid and
+// leaves the list one row tall. The fit term still governs small terminals,
+// where it is the smaller of the two.
 func (m pickerModel) helpBudget() int {
-	if m.height <= 0 {
-		return 0
-	}
-
-	budget := m.height - 6
-	if budget < 1 {
-		return 1
-	}
-
-	return budget
+	return min(m.height-6, m.height/2)
 }
 
 type statsTimeoutMsg struct {
@@ -346,10 +354,7 @@ func (m pickerModel) View() tea.View {
 		b.WriteString(row + "\n")
 	}
 
-	if m.showHelp {
-		b.WriteString(m.helpBlock())
-	}
-
+	b.WriteString(m.helpBlock())
 	b.WriteString("\n" + render(StyleSubtle, m.help()) + frameEnd(m.height))
 
 	return tea.NewView(b.String())

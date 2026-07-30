@@ -131,21 +131,22 @@ func frameEnd(height int) string {
 // says how many were dropped, so a cut panel reads as cut, and the full text is
 // always a `--help` away.
 //
-// max <= 0 leaves the block untouched: a view that has not been sized (no
-// WindowSizeMsg yet, as in a test) is fitting nothing.
-func clampLines(block string, max int) string {
-	if max <= 0 {
+// Callers never pass a limit below two — one row buys nothing but the notice
+// that everything was dropped, so they drop the block instead — but the guard
+// keeps the helper total rather than panicking on a slice bound.
+func clampLines(block string, limit int) string {
+	if limit <= 0 {
 		return block
 	}
 
 	lines := strings.Split(strings.TrimSuffix(block, "\n"), "\n")
-	if len(lines) <= max {
+	if len(lines) <= limit {
 		return block
 	}
 
-	dropped := len(lines) - max + 1
-	lines = lines[:max]
-	lines[max-1] = render(StyleSubtle, fmt.Sprintf("  … %d more lines", dropped))
+	dropped := len(lines) - limit + 1
+	lines = lines[:limit]
+	lines[limit-1] = render(StyleSubtle, fmt.Sprintf("  … %d more lines", dropped))
 
 	return strings.Join(lines, "\n") + "\n"
 }

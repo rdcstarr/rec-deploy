@@ -200,6 +200,57 @@ func TestPickerBackOutIsDistinctFromQuit(t *testing.T) {
 // repaint of an unchanged screen. Measured on a 30-row pty before this pin: 181
 // full-screen clears in three idle seconds; after it, zero.
 //
+// TestPickerHelpTakesAtMostHalfTheScreen pins the trade the help budget makes,
+// because fitting the frame is not on its own enough to make the screen good.
+// Bounding the block only against the terminal let a 24-line command help take
+// eighteen of a 24-row terminal's rows and squeeze the menu to one option — and
+// what it spent them on was the same command list the menu underneath it was
+// already showing, with only the Flags section cut. Half the screen each keeps
+// both readable.
+//
+// The small-terminal end is pinned with it: below two spare rows the block is
+// dropped rather than rendered as a lone "… N more lines", which is a row spent
+// saying nothing and, at six rows, still overflowed the frame.
+func TestPickerHelpTakesAtMostHalfTheScreen(t *testing.T) {
+	SetColor(false)
+
+	lines := make([]string, 24)
+	for i := range lines {
+		lines[i] = "help-" + strconv.Itoa(i)
+	}
+
+	opts := make([]Option, 20)
+	for i := range opts {
+		opts[i] = Option{Label: "opt-" + strconv.Itoa(i), Value: strconv.Itoa(i)}
+	}
+
+	p := pickerModel{Picker: Picker{Title: "menu", Options: opts, Help: strings.Join(lines, "\n")}, showHelp: true}
+	sized, _ := p.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	p = sized.(pickerModel)
+
+	// The block carries its own leading blank line, which is chrome, not help.
+	if got := strings.Count(p.helpBlock(), "\n") - 1; got != 12 {
+		t.Errorf("the help block took %d of 24 rows, want 12 — half the screen", got)
+	}
+	if got := p.listRows(); got != 7 {
+		t.Errorf("a 24-row terminal shows %d options with help open, want 7", got)
+	}
+	if got := frameHeight(p.View().Content); got != 24 {
+		t.Errorf("the frame is %d rows on a 24-row terminal, want exactly 24", got)
+	}
+
+	// Six rows have nothing to spare, and a block that cannot fit is not help.
+	for _, height := range []int{5, 6, 7} {
+		small, _ := p.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+		if block := small.(pickerModel).helpBlock(); block != "" {
+			t.Errorf("a %d-row terminal still renders a help block: %q", height, block)
+		}
+		if got := frameHeight(small.(pickerModel).View().Content); got > height {
+			t.Errorf("a %d-row terminal rendered a %d-row frame with help open", height, got)
+		}
+	}
+}
+
 // The caller's help is swept too, because cmd/help.go hands every menu the
 // running command's help and root's is 24 lines: a block taller than the
 // terminal cannot be compensated for by windowing the options above it — they
@@ -214,14 +265,11 @@ func TestPickerFrameFitsTheTerminal(t *testing.T) {
 
 	for _, callerHelp := range []string{"", strings.Join(oversized, "\n")} {
 		for _, showHelp := range []bool{false, true} {
-			minHeight := 6
-			if showHelp {
-				// Six rows cannot hold a title, its blank line, one option, a
-				// help block and a footer with its own blank line at once.
-				minHeight = 7
-			}
-
-			for height := minHeight; height <= 40; height++ {
+			// Five rows is the floor for every view in this package: a title,
+			// its blank line, one row of content, and a footer with its own
+			// blank line. Below that nothing can be drawn without dropping the
+			// title or the footer, so the sweep stops there.
+			for height := 5; height <= 40; height++ {
 				for n := 1; n <= height+2; n++ {
 					opts := make([]Option, n)
 					for i := range opts {
