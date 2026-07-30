@@ -205,6 +205,32 @@ func TestRenderPathLogEndsInExactlyOneNewline(t *testing.T) {
 	}
 }
 
+// TestRenderPathLogWritesNoEscapesToANonTTY pins the other half of that byte
+// contract: with colour left enabled, `rec-deploy logs --path` redirected to a
+// file, a pipe, systemd or CI must still carry no ANSI. Since lipgloss v2 that
+// is a property of how the output leaves the command rather than of how it was
+// built — Style.Render always emits the escape and only the writer reduces it —
+// so printing pathLogBody with fmt.Fprint wrote raw ANSI256 into deploy.log and
+// onto 16-colour terminals, and only ui.Print keeps it out.
+func TestRenderPathLogWritesNoEscapesToANonTTY(t *testing.T) {
+	ui.SetColor(true)
+	t.Cleanup(func() { ui.SetColor(false) })
+
+	out := capture(t, func() {
+		if err := renderPathLog(
+			store.Deploy{},
+			store.DeployPath{Path: "/var/www/api", Commands: "[]"},
+			"rdcstarr/rec-tools",
+		); err != nil {
+			t.Fatalf("renderPathLog: %v", err)
+		}
+	})
+
+	if strings.ContainsRune(out, '\x1b') {
+		t.Errorf("output redirected off a terminal still carries ANSI escapes:\n%q", out)
+	}
+}
+
 // TestPathLogBodySaysWhenNothingRan pins that a deploy that ran no command says
 // so, rather than rendering an empty pane the operator has to interpret.
 func TestPathLogBodySaysWhenNothingRan(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -792,10 +791,14 @@ func renderPathLog(d store.Deploy, p store.DeployPath, repository string) error 
 
 	// pathLogBody already ends every branch in "\n" — it also feeds ui.Document's
 	// Body for the interactive pane, which appends its own trailing newline
-	// unconditionally. ui.Out would add a second "\n" here and change the
-	// non-TTY byte output this format is pinned to; fmt.Fprint prints the string
-	// as built, and leaves pathLogBody itself untouched for the pane.
-	fmt.Fprint(os.Stdout, pathLogBody(d, p, repository))
+	// unconditionally. ui.Out would add a second "\n" here and change the non-TTY
+	// byte output this format is pinned to; ui.Print writes the string as built,
+	// and leaves pathLogBody itself untouched for the pane. It has to be ui.Print
+	// and not fmt.Fprint: since lipgloss v2 the writer, not Style.Render, is what
+	// downsamples colour, so writing this raw put ANSI256 escapes straight into a
+	// redirected `rec-deploy logs --path > deploy.log` and onto 16-colour
+	// terminals that can never render them.
+	ui.Print(pathLogBody(d, p, repository))
 
 	return nil
 }

@@ -25,6 +25,17 @@ func Outf(format string, a ...any) {
 	_, _ = lipgloss.Fprintln(os.Stdout, fmt.Sprintf(format, a...))
 }
 
+// Print writes s to stdout exactly as given — no trailing newline — through the
+// same downsampling writer as Out. It exists for the output whose own bytes are
+// the contract: `rec-deploy logs --path` prints a block that already ends in
+// "\n", and Out's newline would add a blank line that format never had. Use Out
+// for anything that is a line; use Print only where the caller has already
+// decided where its output ends, and never fmt.Print, which would leak raw
+// ANSI256 into a redirected log or a 16-colour terminal.
+func Print(s string) {
+	_, _ = lipgloss.Fprint(os.Stdout, s)
+}
+
 // Title prints a bold, highlighted title line.
 func Title(s string) {
 	Out(render(StyleTitle, s))

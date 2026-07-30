@@ -20,9 +20,14 @@ var (
 // colorEnabled gates ANSI styling; toggled by SetColor.
 var colorEnabled = true
 
-// SetColor enables or disables ANSI styling across all rendering. It is
-// driven by --no-color / NO_COLOR; when enabled, lipgloss keeps its own
-// TTY-aware auto-detection.
+// SetColor enables or disables ANSI styling across all rendering. It is driven
+// by --no-color / NO_COLOR, and disabling it is the only thing that keeps a
+// style from being emitted at all: since lipgloss v2, Style.Render always writes
+// the full escape sequence, and the reduction to what the terminal actually
+// supports — down to no colour at all when the destination is not a TTY —
+// happens at write time, inside lipgloss.Fprint and its siblings. Styled output
+// therefore has to leave through Out, Outf or Print; a raw fmt.Print bypasses
+// the only step that would have adapted it.
 func SetColor(enabled bool) {
 	colorEnabled = enabled
 }

@@ -66,3 +66,28 @@ func TestOutDownsamplesToTheTerminalProfile(t *testing.T) {
 		t.Errorf("colour was stripped entirely instead of downsampled to the terminal profile: %q", got)
 	}
 }
+
+// TestPrintDownsamplesToTheTerminalProfile pins for Print what the test above
+// pins for Out — since lipgloss v2 it is the writer, not Style.Render, that
+// reduces colour, so the newline-free writer needs its own guard — and pins the
+// reason Print exists at all: it must not append the newline Out appends. The
+// raw fmt.Fprint it replaced in `rec-deploy logs --path` is what wrote ANSI256
+// escapes into a redirected deploy.log.
+func TestPrintDownsamplesToTheTerminalProfile(t *testing.T) {
+	SetColor(true)
+	t.Cleanup(func() { SetColor(true) })
+	t.Setenv("CLICOLOR_FORCE", "1")
+	t.Setenv("TERM", "xterm")
+
+	got := captureStdout(t, func() { Print(render(StyleTitle, "title") + "\n") })
+
+	if strings.Contains(got, "38;5;") {
+		t.Errorf("raw ANSI256 escape survived downsampling to a 16-colour profile: %q", got)
+	}
+	if !strings.Contains(got, "\x1b[") {
+		t.Errorf("colour was stripped entirely instead of downsampled to the terminal profile: %q", got)
+	}
+	if strings.HasSuffix(got, "\n\n") {
+		t.Errorf("Print appended a newline of its own: %q", got)
+	}
+}
