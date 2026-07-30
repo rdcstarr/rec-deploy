@@ -200,29 +200,44 @@ func TestPickerBackOutIsDistinctFromQuit(t *testing.T) {
 // repaint of an unchanged screen. Measured on a 30-row pty before this pin: 181
 // full-screen clears in three idle seconds; after it, zero.
 //
-// The help block is exercised at a height that fits it, because a help panel
-// taller than the terminal cannot be made to fit by windowing the options.
+// The caller's help is swept too, because cmd/help.go hands every menu the
+// running command's help and root's is 24 lines: a block taller than the
+// terminal cannot be compensated for by windowing the options above it — they
+// bottom out at one row — so it has to be bounded in its own right.
 func TestPickerFrameFitsTheTerminal(t *testing.T) {
 	SetColor(false)
 
-	for _, showHelp := range []bool{false, true} {
-		minHeight := 6
-		if showHelp {
-			minHeight = 14
-		}
+	oversized := make([]string, 60)
+	for i := range oversized {
+		oversized[i] = "help-" + strconv.Itoa(i)
+	}
 
-		for height := minHeight; height <= 40; height++ {
-			for n := 1; n <= height+2; n++ {
-				opts := make([]Option, n)
-				for i := range opts {
-					opts[i] = Option{Label: "opt-" + strconv.Itoa(i), Value: strconv.Itoa(i)}
-				}
+	for _, callerHelp := range []string{"", strings.Join(oversized, "\n")} {
+		for _, showHelp := range []bool{false, true} {
+			minHeight := 6
+			if showHelp {
+				// Six rows cannot hold a title, its blank line, one option, a
+				// help block and a footer with its own blank line at once.
+				minHeight = 7
+			}
 
-				var m tea.Model = pickerModel{Picker: Picker{Title: "menu", Options: opts}, showHelp: showHelp}
-				m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+			for height := minHeight; height <= 40; height++ {
+				for n := 1; n <= height+2; n++ {
+					opts := make([]Option, n)
+					for i := range opts {
+						opts[i] = Option{Label: "opt-" + strconv.Itoa(i), Value: strconv.Itoa(i)}
+					}
 
-				if got := frameHeight(m.(pickerModel).View().Content); got > height {
-					t.Fatalf("%d options on a %d-row terminal (help=%v) rendered a %d-row frame", n, height, showHelp, got)
+					var m tea.Model = pickerModel{
+						Picker:   Picker{Title: "menu", Options: opts, Help: callerHelp},
+						showHelp: showHelp,
+					}
+					m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+
+					if got := frameHeight(m.(pickerModel).View().Content); got > height {
+						t.Fatalf("%d options on a %d-row terminal (help=%v, caller help=%d lines) rendered a %d-row frame",
+							n, height, showHelp, strings.Count(callerHelp, "\n")+1, got)
+					}
 				}
 			}
 		}

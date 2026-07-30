@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -112,6 +113,41 @@ func frameEnd(height int) string {
 	}
 
 	return ""
+}
+
+// clampLines truncates a pre-rendered block to at most max lines, keeping the
+// trailing newline the callers build their frames around. It is the other half
+// of frameEnd: windowing the content a view owns cannot bring an oversized
+// frame back inside the terminal when the block *below* that content is itself
+// taller than the terminal — the list bottoms out at one row and the frame
+// still overflows. cmd/help.go hands a whole command's help to a menu or a
+// detail view, and root's runs to 24 lines, so on the 24-row terminal that is
+// the common case the block has to be bounded in its own right.
+//
+// It clamps rather than scrolls: the block is reference material toggled on
+// with h, not the screen's subject, so giving it a second independent scroll
+// offset would fork what the arrow keys mean depending on a toggle — and the
+// navigation contract is one table shared by every view. The last kept line
+// says how many were dropped, so a cut panel reads as cut, and the full text is
+// always a `--help` away.
+//
+// max <= 0 leaves the block untouched: a view that has not been sized (no
+// WindowSizeMsg yet, as in a test) is fitting nothing.
+func clampLines(block string, max int) string {
+	if max <= 0 {
+		return block
+	}
+
+	lines := strings.Split(strings.TrimSuffix(block, "\n"), "\n")
+	if len(lines) <= max {
+		return block
+	}
+
+	dropped := len(lines) - max + 1
+	lines = lines[:max]
+	lines[max-1] = render(StyleSubtle, fmt.Sprintf("  … %d more lines", dropped))
+
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // formModel wraps a huh.Form so Esc and Ctrl+C have identical behavior in

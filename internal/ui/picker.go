@@ -260,13 +260,35 @@ func (m pickerModel) visible() (start, end int) {
 }
 
 // helpBlock is what View appends when help is toggled: the caller's own help
-// when it supplied one, otherwise this picker's keybindings.
+// when it supplied one, otherwise this picker's keybindings — clamped to the
+// rows the terminal has left, because chromeLines counts this block and
+// listRows bottoms out at one option, so a block taller than the terminal would
+// overflow the frame no matter how far the list is windowed.
 func (m pickerModel) helpBlock() string {
+	block := HelpPanel("Keys", m.helpRows(), nil)
 	if m.Help != "" {
-		return "\n" + m.Help + "\n"
+		block = m.Help + "\n"
 	}
 
-	return "\n" + HelpPanel("Keys", m.helpRows(), nil)
+	return "\n" + clampLines(block, m.helpBudget())
+}
+
+// helpBudget is how many lines the help block may occupy: what the terminal has
+// left once the title, the blank line under it, one option row, the block's own
+// leading blank line and the footer with its own blank line are accounted for.
+// Zero means the height is unknown — no WindowSizeMsg has arrived, as in a
+// test — and the block is rendered whole.
+func (m pickerModel) helpBudget() int {
+	if m.height <= 0 {
+		return 0
+	}
+
+	budget := m.height - 6
+	if budget < 1 {
+		return 1
+	}
+
+	return budget
 }
 
 type statsTimeoutMsg struct {

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -55,6 +56,8 @@ func (d Detail) RunKey() (string, error) {
 type detailModel struct {
 	Detail
 	width    int
+	height   int
+	top      int
 	showHelp bool
 	closing  bool
 	quit     bool
@@ -63,10 +66,14 @@ type detailModel struct {
 
 func (m detailModel) Init() tea.Cmd { return nil }
 
+// Update implements tea.Model: Esc / ← / Enter go back, q / Ctrl+C quit, h
+// toggles the help block, an action Key exits reporting itself, and the arrow,
+// page and home/end keys move the window over rows too long to fit.
 func (m detailModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
-		m.width = size.Width
-		return m, nil
+		m.width, m.height = size.Width, size.Height
+
+		return m.clamp(), nil
 	}
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
@@ -82,7 +89,10 @@ func (m detailModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if key.String() == "h" {
 		m.showHelp = !m.showHelp
-		return m, nil
+
+		// Opening the block takes rows away from the body, so the window it
+		// leaves may no longer reach where the view was scrolled to.
+		return m.clamp(), nil
 	}
 	for _, k := range m.Keys {
 		if key.String() == k.Key {
@@ -90,26 +100,131 @@ func (m detailModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	}
-	return m, nil
+
+	// Scrolling is matched after the action Keys so a caller that binds one of
+	// these chords keeps it: the view exists to report and to act on what it
+	// reports, and paging must not take that away.
+	switch key.String() {
+	case "down", "j":
+		m.top++
+	case "up", "k":
+		m.top--
+	case "pgdown", "space":
+		m.top += m.bodyRows()
+	case "pgup":
+		m.top -= m.bodyRows()
+	case "home", "g":
+		m.top = 0
+	case "end", "G":
+		m.top = len(m.lines())
+	}
+
+	return m.clamp(), nil
 }
 
 func (m detailModel) View() tea.View {
 	if m.closing {
 		return tea.NewView("")
 	}
+
 	var b strings.Builder
 	b.WriteString(render(StyleTitle, m.Title) + "\n\n")
-	if m.width > 0 {
-		b.WriteString(TwoColWidth(m.Rows, m.width))
-	} else {
-		b.WriteString(TwoCol(m.Rows))
+
+	// body defaults to the untouched two-column block so a view that fits, or
+	// one that has never received a WindowSizeMsg, renders byte-identically to
+	// what it rendered before it could scroll — lines() trims the block's
+	// trailing newline for the windowing math and must not leak that trim into
+	// what gets printed when no window applies.
+	lines := m.lines()
+	body, scroll := m.rowsBlock(), ""
+	if rows := m.bodyRows(); rows > 0 && rows < len(lines) {
+		body = strings.Join(lines[m.top:m.top+rows], "\n") + "\n"
+		scroll = fmt.Sprintf(" • %d-%d/%d", m.top+1, m.top+rows, len(lines))
 	}
+	b.WriteString(body)
+
+	// The help block replaces the footer rather than joining it, and carries its
+	// own trailing newline; frameEnd owns that last row instead, so a sized view
+	// stops one row short of the height it was given.
 	if m.showHelp {
-		b.WriteString("\n" + m.helpBlock())
-	} else {
-		b.WriteString("\n" + render(StyleSubtle, m.help()) + "\n")
+		b.WriteString("\n" + strings.TrimSuffix(m.helpBlock(), "\n") + frameEnd(m.height))
+
+		return tea.NewView(b.String())
 	}
+
+	footer := m.help()
+	if scroll != "" {
+		footer = "↑/↓ scroll • " + footer + scroll
+	}
+	b.WriteString("\n" + render(StyleSubtle, footer) + frameEnd(m.height))
+
 	return tea.NewView(b.String())
+}
+
+// rowsBlock is the two-column body, sized to the terminal once a WindowSizeMsg
+// has set the width.
+func (m detailModel) rowsBlock() string {
+	if m.width > 0 {
+		return TwoColWidth(m.Rows, m.width)
+	}
+
+	return TwoCol(m.Rows)
+}
+
+// lines is the body split for scrolling. It windows rendered lines rather than
+// Rows because TwoColWidth wraps a long value onto several of them, so one row
+// is not one row of the terminal. Like documentModel's, it is recomputed per
+// redraw rather than cached: a Detail is built once by its caller, and a body
+// large enough for the split to cost anything would not fit a terminal anyway.
+func (m detailModel) lines() []string {
+	return strings.Split(strings.TrimRight(m.rowsBlock(), "\n"), "\n")
+}
+
+// bodyRows is how many body lines fit: the height minus the chrome View draws
+// around them. Zero means the height is unknown — no WindowSizeMsg has arrived,
+// as in a test — and every row is rendered.
+func (m detailModel) bodyRows() int {
+	if m.height <= 0 {
+		return 0
+	}
+
+	rows := m.height - m.chromeLines()
+	if rows < 1 {
+		return 1
+	}
+
+	return rows
+}
+
+// chromeLines is how many rows View writes around the body: the title, the
+// blank line under it, and the footer with its own blank line — or, when help
+// is open, that blank line plus the help block, which replaces the footer.
+func (m detailModel) chromeLines() int {
+	if !m.showHelp {
+		return 4
+	}
+
+	return 3 + strings.Count(m.helpBlock(), "\n")
+}
+
+// clamp keeps the window inside the body after a scroll or a resize.
+func (m detailModel) clamp() detailModel {
+	rows := m.bodyRows()
+	total := len(m.lines())
+	if rows <= 0 || rows >= total {
+		m.top = 0
+
+		return m
+	}
+
+	if last := total - rows; m.top > last {
+		m.top = last
+	}
+	if m.top < 0 {
+		m.top = 0
+	}
+
+	return m
 }
 
 // help is the footer hint line: the action keys first, then navigation.
@@ -124,10 +239,13 @@ func (m detailModel) help() string {
 }
 
 // helpBlock is the panel h toggles: the caller's own help when it supplied one,
-// otherwise this view's keybindings.
+// otherwise this view's keybindings — clamped to the rows the terminal has
+// left, because chromeLines counts this block and bodyRows bottoms out at one
+// line, so a block taller than the terminal would overflow the frame no matter
+// how far the rows are windowed.
 func (m detailModel) helpBlock() string {
 	if m.Help != "" {
-		return m.Help + "\n"
+		return clampLines(m.Help+"\n", m.helpBudget())
 	}
 
 	rows := make([][2]string, 0, len(m.Keys)+3)
@@ -136,5 +254,22 @@ func (m detailModel) helpBlock() string {
 	}
 	rows = append(rows, [2]string{"enter / esc / ←", "back"}, [2]string{"q / ctrl+c", "quit"})
 
-	return HelpPanel("keys", rows, nil)
+	return clampLines(HelpPanel("keys", rows, nil), m.helpBudget())
+}
+
+// helpBudget is how many lines the help block may occupy: what the terminal has
+// left once the title, the blank line under it, one body line and the block's
+// own leading blank line are accounted for. Zero means the height is unknown —
+// no WindowSizeMsg has arrived, as in a test — and the block is rendered whole.
+func (m detailModel) helpBudget() int {
+	if m.height <= 0 {
+		return 0
+	}
+
+	budget := m.height - 4
+	if budget < 1 {
+		return 1
+	}
+
+	return budget
 }
