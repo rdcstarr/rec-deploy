@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	colorful "github.com/lucasb-eyer/go-colorful"
 	"golang.org/x/term"
 )

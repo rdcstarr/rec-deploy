@@ -3,7 +3,7 @@
 // consistent across the whole CLI.
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // Shared lipgloss styles, kept in one place so every command renders with the
 // same palette.
