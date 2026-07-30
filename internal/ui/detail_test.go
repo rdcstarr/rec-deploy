@@ -7,7 +7,7 @@ import (
 
 func TestDetailViewRendersOneBreadcrumbAndRows(t *testing.T) {
 	m := detailModel{Detail: Detail{Title: "rec-deploy / MCP / Status", Rows: [][2]string{{"remote", "off"}}}, width: 80}
-	view := m.View()
+	view := m.View().Content
 	if strings.Count(view, "rec-deploy / MCP / Status") != 1 || !strings.Contains(view, "remote") || !strings.Contains(view, "off") {
 		t.Errorf("unexpected detail view:\n%s", view)
 	}
@@ -43,7 +43,7 @@ func TestDetailActionKeysExitWithTheKey(t *testing.T) {
 	if cmd != nil || model.(detailModel).key != "" {
 		t.Error("an unbound key exited the view")
 	}
-	if view := (detailModel{Detail: d}).View(); !strings.Contains(view, "s restart service") {
+	if view := (detailModel{Detail: d}).View().Content; !strings.Contains(view, "s restart service") {
 		t.Errorf("the footer does not advertise the action key:\n%s", view)
 	}
 }

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Document displays preformatted text such as configuration or source code.
@@ -49,7 +49,7 @@ func (m documentModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.clamp(), nil
 	}
 
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
@@ -83,9 +83,9 @@ func (m documentModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m.clamp(), nil
 }
 
-func (m documentModel) View() string {
+func (m documentModel) View() tea.View {
 	if m.closing {
-		return ""
+		return tea.NewView("")
 	}
 
 	var b strings.Builder
@@ -106,7 +106,7 @@ func (m documentModel) View() string {
 	b.WriteString(body)
 	b.WriteString("\n" + render(StyleSubtle, footer) + "\n")
 
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 // lines is the body split for scrolling. It is recomputed per redraw rather than

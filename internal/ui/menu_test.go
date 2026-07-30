@@ -117,7 +117,7 @@ func TestKeyValueColumnFitsEveryKey(t *testing.T) {
 
 func TestDocumentPreservesPreformattedBody(t *testing.T) {
 	body := "{\n  \"url\": \"https://example.com/a/very/long/path\"\n}"
-	view := (documentModel{Document: Document{Title: "JSON", Body: body}}).View()
+	view := (documentModel{Document: Document{Title: "JSON", Body: body}}).View().Content
 	if !strings.Contains(view, body) {
 		t.Fatalf("document changed its body:\n%s", view)
 	}

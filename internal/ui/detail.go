@@ -3,7 +3,7 @@ package ui
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Detail displays a read-only set of labelled values until the operator goes
@@ -68,7 +68,7 @@ func (m detailModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = size.Width
 		return m, nil
 	}
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
@@ -93,9 +93,9 @@ func (m detailModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m detailModel) View() string {
+func (m detailModel) View() tea.View {
 	if m.closing {
-		return ""
+		return tea.NewView("")
 	}
 	var b strings.Builder
 	b.WriteString(render(StyleTitle, m.Title) + "\n\n")
@@ -109,7 +109,7 @@ func (m detailModel) View() string {
 	} else {
 		b.WriteString("\n" + render(StyleSubtle, m.help()) + "\n")
 	}
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 // help is the footer hint line: the action keys first, then navigation.

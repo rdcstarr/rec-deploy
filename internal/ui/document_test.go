@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // TestDocumentScrolls pins that a body longer than the terminal shows a window
@@ -22,7 +22,7 @@ func TestDocumentScrolls(t *testing.T) {
 	var m tea.Model = documentModel{Document: Document{Title: "output", Body: body}}
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
 
-	view := m.(documentModel).View()
+	view := m.(documentModel).View().Content
 	if !strings.Contains(view, "line-0\n") {
 		t.Errorf("the first line is not shown before scrolling:\n%s", view)
 	}
@@ -34,7 +34,7 @@ func TestDocumentScrolls(t *testing.T) {
 		m, _ = m.Update(keyPress("down"))
 	}
 
-	view = m.(documentModel).View()
+	view = m.(documentModel).View().Content
 	if !strings.Contains(view, "line-59") {
 		t.Errorf("scrolling down never reaches the end:\n%s", view)
 	}
@@ -56,7 +56,7 @@ func TestDocumentUnsizedBodyKeepsTrailingNewline(t *testing.T) {
 
 	want := render(StyleTitle, "output") + "\n\n" + body + "\n\n" +
 		render(StyleSubtle, "enter/"+navigationFooter(navigationDetail)) + "\n"
-	if got := m.View(); got != want {
+	if got := m.View().Content; got != want {
 		t.Errorf("unsized document with trailing newline rendered wrong:\ngot:  %q\nwant: %q", got, want)
 	}
 }
@@ -67,12 +67,12 @@ func TestDocumentShowsEverythingWhenItFits(t *testing.T) {
 	SetColor(false)
 
 	m := documentModel{Document: Document{Title: "output", Body: "one\ntwo"}}
-	if view := m.View(); !strings.Contains(view, "one") || !strings.Contains(view, "two") {
+	if view := m.View().Content; !strings.Contains(view, "one") || !strings.Contains(view, "two") {
 		t.Errorf("an unsized document lost a line:\n%s", view)
 	}
 
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
-	if view := sized.(documentModel).View(); !strings.Contains(view, "one") || !strings.Contains(view, "two") {
+	if view := sized.(documentModel).View().Content; !strings.Contains(view, "one") || !strings.Contains(view, "two") {
 		t.Errorf("a document that fits lost a line:\n%s", view)
 	}
 }

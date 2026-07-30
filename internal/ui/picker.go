@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -120,7 +120,7 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
@@ -281,9 +281,9 @@ func matchesPickerKey(got, configured string) bool {
 }
 
 // View implements tea.Model.
-func (m pickerModel) View() string {
+func (m pickerModel) View() tea.View {
 	if m.quitting {
-		return ""
+		return tea.NewView("")
 	}
 
 	var b strings.Builder
@@ -327,7 +327,7 @@ func (m pickerModel) View() string {
 
 	b.WriteString("\n" + render(StyleSubtle, m.help()) + "\n")
 
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 // exitKey reports whether s is one of the picker's exit Keys.

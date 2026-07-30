@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // keyPress builds the message a terminal sends for chord, so the tests below
@@ -13,24 +13,27 @@ import (
 func keyPress(chord string) tea.KeyMsg {
 	switch chord {
 	case "up":
-		return tea.KeyMsg{Type: tea.KeyUp}
+		return tea.KeyPressMsg{Code: tea.KeyUp}
 	case "down":
-		return tea.KeyMsg{Type: tea.KeyDown}
+		return tea.KeyPressMsg{Code: tea.KeyDown}
 	case "left":
-		return tea.KeyMsg{Type: tea.KeyLeft}
+		return tea.KeyPressMsg{Code: tea.KeyLeft}
 	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "esc":
-		return tea.KeyMsg{Type: tea.KeyEsc}
+		return tea.KeyPressMsg{Code: tea.KeyEsc}
 	case "ctrl+c":
-		return tea.KeyMsg{Type: tea.KeyCtrlC}
+		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	}
 
+	// A modified chord carries no Text: Key.String returns Text verbatim when it
+	// is set, so filling it in would stringify Alt+R as a plain "r" and the
+	// reveal chord would match a bare keypress.
 	if alt, ok := strings.CutPrefix(chord, "alt+"); ok {
-		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(alt), Alt: true}
+		return tea.KeyPressMsg{Code: []rune(alt)[0], Mod: tea.ModAlt}
 	}
 
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(chord)}
+	return tea.KeyPressMsg{Code: []rune(chord)[0], Text: chord}
 }
 
 // TestKeyPressMatchesTheNavigationContract pins that keyPress produces the exact

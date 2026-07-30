@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 )
 
 // TestFormKeymapAddsArrowNavigation checks that the shared keymap binds ↑/↓ to
@@ -46,7 +46,7 @@ func TestFormFooterShowsBackAndQuit(t *testing.T) {
 	var v string
 	f := huh.NewForm(huh.NewGroup(huh.NewInput().Value(&v))).WithKeyMap(formKeyMap())
 	f.Init()
-	view := formModel{form: f, footer: formFooter(false, false)}.View()
+	view := formModel{form: f, footer: formFooter(false, false)}.View().Content
 	if !strings.Contains(view, "back") {
 		t.Errorf("form view does not show the back hint:\n%s", view)
 	}
@@ -63,7 +63,7 @@ func TestCompletedFormRendersNothing(t *testing.T) {
 	f.Init()
 
 	model := formModel{form: f, footer: formFooter(false, false)}
-	if model.View() == "" {
+	if model.View().Content == "" {
 		t.Fatal("a live form rendered nothing; the test cannot tell completion apart")
 	}
 
@@ -75,7 +75,7 @@ func TestCompletedFormRendersNothing(t *testing.T) {
 	if f.State == huh.StateNormal {
 		t.Fatalf("form did not complete on enter, state = %v", f.State)
 	}
-	if view := model.View(); view != "" {
+	if view := model.View().Content; view != "" {
 		t.Errorf("completed form rendered %q, want an empty frame so nothing is left behind", view)
 	}
 }
@@ -118,7 +118,7 @@ func TestSecretFieldIsMasked(t *testing.T) {
 	f := huh.NewForm(huh.NewGroup(newInput("Password", "").EchoMode(huh.EchoModePassword).Value(&v))).
 		WithKeyMap(formKeyMap())
 	f.Init()
-	if view := (formModel{form: f, footer: formFooter(false, false)}).View(); strings.Contains(view, "hunter2secret") {
+	if view := (formModel{form: f, footer: formFooter(false, false)}).View().Content; strings.Contains(view, "hunter2secret") {
 		t.Errorf("secret value visible in view:\n%s", view)
 	}
 
@@ -130,7 +130,7 @@ func TestSecretFieldIsMasked(t *testing.T) {
 
 	built := huh.NewForm(huh.NewGroup(in...)).WithKeyMap(formKeyMap())
 	built.Init()
-	if view := (formModel{form: built, footer: formFooter(false, false)}).View(); strings.Contains(view, "hunter2secret") {
+	if view := (formModel{form: built, footer: formFooter(false, false)}).View().Content; strings.Contains(view, "hunter2secret") {
 		t.Errorf("Field.Secret wiring in buildInputs did not mask the value:\n%s", view)
 	}
 }
@@ -145,17 +145,17 @@ func TestSecretFieldRevealTogglesInPlace(t *testing.T) {
 	form.Init()
 	model := formModel{form: form, footer: formFooter(false, true), secrets: map[string]bool{secretKey: true}}
 
-	if view := model.View(); strings.Contains(view, value) {
+	if view := model.View().Content; strings.Contains(view, value) {
 		t.Fatalf("secret starts revealed:\n%s", view)
 	}
 	next, _ := model.Update(keyPress("alt+r"))
 	model = next.(formModel)
-	if view := model.View(); !strings.Contains(view, value) {
+	if view := model.View().Content; !strings.Contains(view, value) {
 		t.Errorf("Alt+R did not reveal the input:\n%s", view)
 	}
 	next, _ = model.Update(keyPress("alt+r"))
 	model = next.(formModel)
-	if view := model.View(); strings.Contains(view, value) {
+	if view := model.View().Content; strings.Contains(view, value) {
 		t.Errorf("second Alt+R did not mask the input:\n%s", view)
 	}
 }
@@ -167,14 +167,14 @@ func TestDescriptionIsRendered(t *testing.T) {
 	f := huh.NewForm(huh.NewGroup(newInput("Title", "find-me-desc").Value(new(string)))).
 		WithKeyMap(formKeyMap())
 	f.Init()
-	if view := (formModel{form: f, footer: formFooter(false, false)}).View(); !strings.Contains(view, "find-me-desc") {
+	if view := (formModel{form: f, footer: formFooter(false, false)}).View().Content; !strings.Contains(view, "find-me-desc") {
 		t.Errorf("description text missing from view:\n%s", view)
 	}
 
 	bare := huh.NewForm(huh.NewGroup(newInput("Title", "").Value(new(string)))).
 		WithKeyMap(formKeyMap())
 	bare.Init()
-	if view := (formModel{form: bare, footer: formFooter(false, false)}).View(); strings.Contains(view, "find-me-desc") {
+	if view := (formModel{form: bare, footer: formFooter(false, false)}).View().Content; strings.Contains(view, "find-me-desc") {
 		t.Errorf("unexpected description in bare view:\n%s", view)
 	}
 }

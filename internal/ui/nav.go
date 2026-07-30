@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 )
 
 // ErrQuit signals that the user asked to quit the whole interactive session —
@@ -109,7 +109,7 @@ func (m formModel) Init() tea.Cmd { return m.form.Init() }
 // Update implements tea.Model: it claims the back and quit chords and otherwise
 // delegates to the wrapped form, quitting once the form is no longer running.
 func (m formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok {
+	if k, ok := msg.(tea.KeyPressMsg); ok {
 		if matchesPickerKey(k.String(), "alt+r") {
 			focused := m.form.GetFocusedField()
 			if m.secrets[focused.GetKey()] {
@@ -150,9 +150,9 @@ func (m formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View implements tea.Model: the form plus a navigation hint footer so back/quit
 // (and field movement) are discoverable, mirroring the picker's footer.
-func (m formModel) View() string {
+func (m formModel) View() tea.View {
 	if m.nav != navProceed {
-		return ""
+		return tea.NewView("")
 	}
 
 	// A submitted huh form renders "" (its own quitting guard). Appending the
@@ -162,13 +162,18 @@ func (m formModel) View() string {
 	// leave a blank line behind and the spacing looked arbitrary.
 	view := m.form.View()
 	if view == "" {
-		return ""
+		return tea.NewView("")
 	}
 	if m.footer != "" {
 		view += "\n" + m.footer
 	}
 
-	return view
+	// Focus reporting moved from a program option onto the view in bubbletea v2,
+	// so it is set here to keep matching huh's own program options.
+	v := tea.NewView(view)
+	v.ReportFocus = true
+
+	return v
 }
 
 // formFooter renders the navigation hint shown under a form, mirroring the
@@ -217,17 +222,17 @@ func runFormWithSecrets(fields []huh.Field, secrets map[string]bool) nav {
 	}
 
 	form := huh.NewForm(huh.NewGroup(fields...)).
-		WithTheme(huh.ThemeCharm()).
+		WithTheme(huh.ThemeFunc(huh.ThemeCharm)).
 		WithShowHelp(false).
 		WithKeyMap(formKeyMap())
 
 	// Match huh's own program options so a wrapped form renders exactly where a
-	// bare huh form would — on stderr, with focus reporting.
+	// bare huh form would — on stderr. Focus reporting is a view field now, set
+	// by formModel.View.
 	res, err := tea.NewProgram(formModel{
 		form: form, footer: formFooter(len(fields) > 1, len(secrets) > 0), secrets: secrets,
 	},
 		tea.WithOutput(os.Stderr),
-		tea.WithReportFocus(),
 	).Run()
 	if err != nil {
 		requestQuit()

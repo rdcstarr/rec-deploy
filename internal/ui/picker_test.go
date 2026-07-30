@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // TestPickerActionReordersAndFollowsCursor verifies that an Action returning a
@@ -123,7 +123,7 @@ func TestPickerScrollsToKeepTheCursorVisible(t *testing.T) {
 		m, _ = m.Update(keyPress("down"))
 	}
 
-	view := m.(pickerModel).View()
+	view := m.(pickerModel).View().Content
 	if !strings.Contains(view, "option-20") {
 		t.Errorf("the option under the cursor is not rendered:\n%s", view)
 	}
@@ -146,7 +146,7 @@ func TestPickerShowsEverythingWhenItFits(t *testing.T) {
 	sized, _ = sized.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
 
 	for _, m := range []tea.Model{sized, pickerModel{Picker: Picker{Options: options}}} {
-		view := m.(pickerModel).View()
+		view := m.(pickerModel).View().Content
 		if !strings.Contains(view, "a") || !strings.Contains(view, "b") {
 			t.Errorf("a list that fits lost an option:\n%s", view)
 		}
@@ -163,7 +163,7 @@ func TestPickerTruncatesRowsToTerminalWidth(t *testing.T) {
 	}}
 
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 24, Height: 10})
-	view := next.(pickerModel).View()
+	view := next.(pickerModel).View().Content
 	if !strings.Contains(view, "…") {
 		t.Errorf("narrow picker did not truncate its row:\n%s", view)
 	}

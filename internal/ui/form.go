@@ -3,7 +3,7 @@ package ui
 import (
 	"fmt"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 )
 
 // Option is a selectable choice with a display label and an underlying value.

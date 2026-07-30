@@ -3,7 +3,7 @@ package ui
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // SecretDetail displays one secret as a read-only masked value. Alt+R reveals
@@ -40,7 +40,7 @@ type secretDetailModel struct {
 func (m secretDetailModel) Init() tea.Cmd { return nil }
 
 func (m secretDetailModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
@@ -59,9 +59,9 @@ func (m secretDetailModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m secretDetailModel) View() string {
+func (m secretDetailModel) View() tea.View {
 	if m.closing {
-		return ""
+		return tea.NewView("")
 	}
 	value := "********"
 	action := "reveal"
@@ -73,5 +73,5 @@ func (m secretDetailModel) View() string {
 	b.WriteString(render(StyleTitle, m.Title) + "\n\n")
 	b.WriteString(TwoCol([][2]string{{m.Label, value}}))
 	b.WriteString("\n" + render(StyleSubtle, "⌥R "+action+" • enter/"+navigationFooter(navigationDetail)) + "\n")
-	return b.String()
+	return tea.NewView(b.String())
 }
