@@ -236,7 +236,7 @@ func RenderError(err error) {
 		return
 	}
 
-	fmt.Fprintln(os.Stderr, render(StyleError, "error:")+" "+err.Error())
+	_, _ = lipgloss.Fprintln(os.Stderr, render(StyleError, "error:")+" "+err.Error())
 }
 
 // PrintJSON marshals v as indented JSON to stdout. Commands use it when the

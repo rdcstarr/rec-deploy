@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-isatty"
 )
 
@@ -33,7 +34,11 @@ func Spinner(title string, action func() error) error {
 			fmt.Fprint(os.Stderr, "\r\x1b[2K") // clear the spinner line
 			return err
 		case <-tick.C:
-			fmt.Fprintf(os.Stderr, "\r\x1b[2K%s %s",
+			fmt.Fprint(os.Stderr, "\r\x1b[2K") // clear the spinner line before redrawing it
+			// The frame and title are routed through lipgloss so their colour
+			// is downsampled to the terminal profile; the cursor control above
+			// stays a plain write so a NoTTY-detected profile never strips it.
+			_, _ = lipgloss.Fprintf(os.Stderr, "%s %s",
 				render(StyleHighlight, spinnerFrames[i%len(spinnerFrames)]),
 				render(StyleSubtle, title))
 		}

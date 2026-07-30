@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 
@@ -32,19 +31,38 @@ func TestTwoColWidthWrapsLongRows(t *testing.T) {
 	}
 }
 
-// TestOutDownsamplesToTheTerminalProfile pins that styled output goes through
-// lipgloss's writer, which strips or reduces colour the terminal cannot show.
-// lipgloss v2 downsamples at write time, not in Render, so a plain
-// fmt.Fprintln would leak truecolor sequences onto a 16-colour console.
+// TestOutDownsamplesToTheTerminalProfile pins that Out itself writes through
+// lipgloss's writer, which downsamples colour to what the declared terminal
+// profile can show. lipgloss v2 moved that reduction to write time, out of
+// Style.Render, so a plain fmt.Fprintln inside Out would leak Style.Render's
+// raw ANSI256 escape verbatim onto a terminal that only understands the
+// basic 16-colour (ANSI) palette.
+//
+// CLICOLOR_FORCE and TERM are set so colorprofile.Detect settles on a stable
+// ANSI (16-colour, not TrueColor) profile for the captured pipe: without
+// CLICOLOR_FORCE, Detect treats any non-terminal file — including the pipe
+// captureStdout swaps in for os.Stdout — as NoTTY and strips colour
+// entirely, which would make this test pass whether or not Out actually
+// downsamples, exactly like the ANSI256-index StyleTitle color never
+// producing the truecolor (`38;2;`) prefix an earlier version of this test
+// checked for.
 func TestOutDownsamplesToTheTerminalProfile(t *testing.T) {
 	SetColor(true)
-	defer SetColor(false)
+	t.Cleanup(func() { SetColor(true) })
+	t.Setenv("CLICOLOR_FORCE", "1")
+	t.Setenv("TERM", "xterm")
 
-	var buf bytes.Buffer
-	if _, err := lipgloss.Fprintln(&buf, render(StyleTitle, "title")); err != nil {
-		t.Fatalf("Fprintln: %v", err)
+	raw := render(StyleTitle, "title")
+	if !strings.Contains(raw, "38;5;") {
+		t.Fatalf("StyleTitle no longer renders an ANSI256 escape to downsample from: %q", raw)
 	}
-	if strings.Contains(buf.String(), "\x1b[38;2;") {
-		t.Errorf("truecolor sequence survived downsampling to a non-tty: %q", buf.String())
+
+	got := captureStdout(t, func() { Out(raw) })
+
+	if strings.Contains(got, "38;5;") {
+		t.Errorf("raw ANSI256 escape survived downsampling to a 16-colour profile: %q", got)
+	}
+	if !strings.Contains(got, "\x1b[") {
+		t.Errorf("colour was stripped entirely instead of downsampled to the terminal profile: %q", got)
 	}
 }
