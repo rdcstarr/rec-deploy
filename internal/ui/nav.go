@@ -93,6 +93,27 @@ func navigationFooter(context navigationContext) string {
 	return "esc/← back • q/ctrl+c quit"
 }
 
+// frameEnd terminates the last line of a view that has sized itself to the
+// terminal — with nothing, because a frame is measured by its newlines and the
+// one after the footer opens a further row. A view that has not been sized (no
+// WindowSizeMsg yet, as in a test) is fitting nothing and keeps the newline, so
+// its output still reads as a finished block of text.
+//
+// The extra row is not cosmetic under Bubble Tea v2. Rendering inline, it drops
+// the top of an oversized frame — which silently ate the title of every screen
+// long enough to scroll — and its "unchanged frame, nothing to write" check
+// compares the frame against a screen buffer it has already truncated to the
+// terminal height. The two can never match again, so the renderer repainted a
+// byte-identical screen at full framerate with no input at all: 181 full-screen
+// clears and 215KB in three idle seconds on `rec-deploy logs`.
+func frameEnd(height int) string {
+	if height <= 0 {
+		return "\n"
+	}
+
+	return ""
+}
+
 // formModel wraps a huh.Form so Esc and Ctrl+C have identical behavior in
 // every input while all text-editing chords continue to reach the field.
 type formModel struct {

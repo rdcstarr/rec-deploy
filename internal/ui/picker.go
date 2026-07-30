@@ -328,7 +328,7 @@ func (m pickerModel) View() tea.View {
 		b.WriteString(m.helpBlock())
 	}
 
-	b.WriteString("\n" + render(StyleSubtle, m.help()) + "\n")
+	b.WriteString("\n" + render(StyleSubtle, m.help()) + frameEnd(m.height))
 
 	return tea.NewView(b.String())
 }

@@ -104,7 +104,7 @@ func (m documentModel) View() tea.View {
 	}
 
 	b.WriteString(body)
-	b.WriteString("\n" + render(StyleSubtle, footer) + "\n")
+	b.WriteString("\n" + render(StyleSubtle, footer) + frameEnd(m.height))
 
 	return tea.NewView(b.String())
 }

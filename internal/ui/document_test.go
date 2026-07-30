@@ -109,3 +109,42 @@ func TestDocumentShowsEverythingWhenItFits(t *testing.T) {
 		t.Errorf("a document that fits lost a line:\n%s", view)
 	}
 }
+
+// frameHeight is how many terminal rows a rendered frame occupies. It is Bubble
+// Tea's own arithmetic — a frame's trailing newline opens one more row — so a
+// test can assert against the height the renderer will compute for the same
+// string.
+func frameHeight(view string) int {
+	return strings.Count(view, "\n") + 1
+}
+
+// TestDocumentFrameFitsTheTerminal pins that a sized document never hands the
+// renderer more rows than the terminal has, at any height and for a body of any
+// length around the point where it starts paging.
+//
+// A one-row overflow is not cosmetic under Bubble Tea v2. Rendering inline, it
+// drops the frame's top row — the title never reached the screen — and its
+// unchanged-frame check compares the frame against a screen buffer it has
+// already truncated to the terminal height, so the two never match again and
+// the renderer repaints the identical screen at full framerate with no input at
+// all. Measured on a 30-row pty before this pin: 181 full-screen clears and
+// 215KB written in three idle seconds on `rec-deploy logs`; after it, zero.
+func TestDocumentFrameFitsTheTerminal(t *testing.T) {
+	SetColor(false)
+
+	for height := 6; height <= 40; height++ {
+		for n := 1; n <= height+2; n++ {
+			lines := make([]string, n)
+			for i := range lines {
+				lines[i] = "line-" + strconv.Itoa(i)
+			}
+
+			var m tea.Model = documentModel{Document: Document{Title: "output", Body: strings.Join(lines, "\n")}}
+			m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+
+			if got := frameHeight(m.(documentModel).View().Content); got > height {
+				t.Fatalf("a %d-line body on a %d-row terminal rendered a %d-row frame", n, height, got)
+			}
+		}
+	}
+}

@@ -193,3 +193,38 @@ func TestPickerBackOutIsDistinctFromQuit(t *testing.T) {
 		t.Error("Ctrl+C did not set the quit flag; Run would not return ErrQuit")
 	}
 }
+
+// TestPickerFrameFitsTheTerminal pins the picker's half of the overflow the
+// document view had: a menu long enough to page rendered one row more than the
+// terminal, which under Bubble Tea v2 costs the title row and a full-framerate
+// repaint of an unchanged screen. Measured on a 30-row pty before this pin: 181
+// full-screen clears in three idle seconds; after it, zero.
+//
+// The help block is exercised at a height that fits it, because a help panel
+// taller than the terminal cannot be made to fit by windowing the options.
+func TestPickerFrameFitsTheTerminal(t *testing.T) {
+	SetColor(false)
+
+	for _, showHelp := range []bool{false, true} {
+		minHeight := 6
+		if showHelp {
+			minHeight = 14
+		}
+
+		for height := minHeight; height <= 40; height++ {
+			for n := 1; n <= height+2; n++ {
+				opts := make([]Option, n)
+				for i := range opts {
+					opts[i] = Option{Label: "opt-" + strconv.Itoa(i), Value: strconv.Itoa(i)}
+				}
+
+				var m tea.Model = pickerModel{Picker: Picker{Title: "menu", Options: opts}, showHelp: showHelp}
+				m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+
+				if got := frameHeight(m.(pickerModel).View().Content); got > height {
+					t.Fatalf("%d options on a %d-row terminal (help=%v) rendered a %d-row frame", n, height, showHelp, got)
+				}
+			}
+		}
+	}
+}
