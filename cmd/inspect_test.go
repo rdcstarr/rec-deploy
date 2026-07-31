@@ -19,7 +19,7 @@ import (
 	"github.com/rdcstarr/rec-deploy/internal/units"
 )
 
-// TestScanRowBroken is the contract of `rec-deploy scan`: a checkout whose manifest
+// TestScanRowBroken is the contract of `rec-deploy repo scan`: a checkout whose manifest
 // will not parse is still listed, with ✗ and the parse error. Dropping it is the
 // an old implementation defect — the operator is looking for exactly that row.
 func TestScanRowBroken(t *testing.T) {

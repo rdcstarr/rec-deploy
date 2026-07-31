@@ -38,7 +38,7 @@ func NewSecret() (string, error) {
 // HookURL is the webhook URL registered on GitHub for this server.
 func HookURL(publicURL, token string) (string, error) {
 	if strings.TrimSpace(publicURL) == "" {
-		return "", fmt.Errorf("public_url is not configured — run `rec-deploy init`, or `rec-deploy config set public_url http://<ip>:9000`")
+		return "", fmt.Errorf("public_url is not configured — run `rec-deploy init`, or `rec-deploy repo config set public_url http://<ip>:9000`")
 	}
 
 	u, err := url.Parse(publicURL)

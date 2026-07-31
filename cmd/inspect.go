@@ -31,7 +31,7 @@ func newScanCmd() *cobra.Command {
 		Short:   "Show every checkout discovery finds",
 		Long:    "scan walks the configured discovery roots and prints every checkout carrying a .rec-deploy.yml — the broken ones included, each flagged with what is wrong with it.",
 		Args:    cobra.NoArgs,
-		Example: "rec-deploy scan\nrec-deploy scan --json",
+		Example: "rec-deploy repo scan\nrec-deploy repo scan --json",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			found, err := scanInstallations(cmd.Context())
 			if err != nil {
@@ -59,10 +59,10 @@ func newScanCmd() *cobra.Command {
 // renderScan prints one line per installation. It shows what discovery found,
 // not what it approves of: a checkout that will not deploy is listed with the
 // reason, never omitted — an installation missing from the output is the one
-// question `rec-deploy scan` exists to answer.
+// question `rec-deploy repo scan` exists to answer.
 func renderScan(found []discover.Installation) {
 	if len(found) == 0 {
-		ui.Warn("no installation found — check the roots with `rec-deploy config get discovery.roots`")
+		ui.Warn("no installation found — check the roots with `rec-deploy repo config get discovery.roots`")
 
 		return
 	}
@@ -479,12 +479,12 @@ func listLogs(ctx context.Context, slug string, limit int) error {
 
 	if len(deploys) == 0 {
 		if slug != "" {
-			ui.Warn(slug + " has never been deployed from this server — deploy it with `rec-deploy deploy " + slug + "`")
+			ui.Warn(slug + " has never been deployed from this server — deploy it with `rec-deploy repo deploy " + slug + "`")
 
 			return nil
 		}
 
-		ui.Warn("no deploy has run on this server yet — deploy one with `rec-deploy deploy <owner/repo>`")
+		ui.Warn("no deploy has run on this server yet — deploy one with `rec-deploy repo deploy <owner/repo>`")
 
 		return nil
 	}

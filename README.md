@@ -161,7 +161,7 @@ upgraded with STARTTLS when the server advertises it. That is what makes a
 `smtp.resend.com:465` or `smtp.gmail.com:465` configuration send rather than sit
 waiting for a greeting that never comes.
 
-Verification is a property of the interactive setup only. `rec-deploy config set
+Verification is a property of the interactive setup only. `rec-deploy repo config set
 notify.telegram.token …` and its siblings stay format-checked and offline, so a
 scripted or CI run never depends on reaching Telegram or a mail server; use
 `rec-deploy notifications test` when you want the round trip.
@@ -353,7 +353,7 @@ GitHub push
 ```
 
 No control plane, no agent inventory, no SSH between servers, no single point of failure.
-A server that is down misses its push and catches up with `rec-deploy deploy owner/repo`.
+A server that is down misses its push and catches up with `rec-deploy repo deploy owner/repo`.
 
 ## Security posture
 
@@ -380,22 +380,22 @@ rec-deploy                              # interactive hub (TTY) / help (piped)
 rec-deploy init                         # setup wizard: token, listen, public URL, roots, notifications
 rec-deploy serve                        # webhook daemon (systemd)
 
-rec-deploy repo add <owner/repo>        # keygen + upload deploy key + create webhook
-rec-deploy repo list                    # registered repositories
-rec-deploy repo show <owner/repo>       # key id, hook id, checkouts, last deploy
-rec-deploy repo remove <owner/repo>     # deletes the key and the hook on GitHub too
-rec-deploy repo rotate <owner/repo>     # roll the HMAC secret and the deploy key
-rec-deploy repo install <owner/repo> <path>   # clone into path as its owner
+rec-deploy repo add <owner/repo>                  # keygen + upload deploy key + create webhook
+rec-deploy repo list                              # registered repositories
+rec-deploy repo show <owner/repo>                 # key id, hook id, checkouts, last deploy
+rec-deploy repo remove <owner/repo>               # deletes the key and the hook on GitHub too
+rec-deploy repo rotate <owner/repo>               # roll the HMAC secret and the deploy key
+rec-deploy repo install <owner/repo> <path>       # clone into path as its owner
+rec-deploy repo deploy <owner/repo> [--path P]    # deploy now; command output in rec-deploy logs
+rec-deploy repo rollback <owner/repo> [--path P]  # back to the previous SHA
+rec-deploy repo scan                              # what discovery finds, and why
+rec-deploy repo config get <key> | set <key> <value> | path
 
-rec-deploy deploy <owner/repo> [--path P]     # deploy now; command output in rec-deploy logs
-rec-deploy rollback <owner/repo> [--path P]   # back to the previous SHA
-rec-deploy scan                         # what discovery finds, and why
 rec-deploy status                       # daemon health, repos, last deploy per path
 rec-deploy service start|stop|restart   # the systemd unit that runs the daemon
 rec-deploy logs [owner/repo]            # deploy history
 rec-deploy notifications [test]         # channel settings; test probes one channel or all of them
 
-rec-deploy config get <key> | set <key> <value> | path
 rec-deploy self-update                  # SHA-256 verified against checksums.txt; fails closed
 rec-deploy uninstall [--keep-github] [--keep-cloudflare] [--keep-data]   # removes services, local data, github keys/webhooks and the MCP tunnel
 rec-deploy completion [bash|zsh|fish|powershell]

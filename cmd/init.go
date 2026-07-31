@@ -31,7 +31,7 @@ func newInitCmd() *cobra.Command {
 		Example: "  rec-deploy init",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !isInteractive() {
-				return fmt.Errorf("init is interactive — set the values with `rec-deploy config set <key> <value>`")
+				return fmt.Errorf("init is interactive — set the values with `rec-deploy repo config set <key> <value>`")
 			}
 
 			return initWizard(cmd.Context())

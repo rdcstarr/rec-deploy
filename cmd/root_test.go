@@ -14,21 +14,15 @@ import (
 // TestEveryCommandIsReachable is what keeps a hand-written hub from drifting: a
 // command must appear in hubOptions() under some config state — the hub's
 // contents differ between an uninitialized and an initialized server, so
-// "reachable" means the union of both, not either alone — or land in one of
-// the group menus the hub opens, or be marked non-interactive on purpose.
-// Unreachable in every state is the failure mode a curated list has and a
-// reflected one does not.
+// "reachable" means the union of both, not either alone — or be marked
+// non-interactive on purpose. A command reached through a group's own menu
+// (deploy, rollback, scan and config through repo's) is a child of that
+// group now, not of root, so it never appears in this loop at all — the same
+// way add, list and show never have. Unreachable in every state is the
+// failure mode a curated list has and a reflected one does not.
 func TestEveryCommandIsReachable(t *testing.T) {
 	saved := cfg
 	defer func() { cfg = saved }()
-
-	// Reachable from a group menu rather than from the hub.
-	nested := map[string]string{
-		"deploy":   "repo",
-		"config":   "repo",
-		"scan":     "repo",
-		"rollback": "repo",
-	}
 
 	hub := make(map[string]bool)
 	for _, state := range []*config.Config{{Initialized: true}, {}} {
@@ -43,9 +37,9 @@ func TestEveryCommandIsReachable(t *testing.T) {
 		switch {
 		case c.Hidden, name == "help", name == "completion":
 		case c.Annotations[annotationInteractive] == "false":
-		case hub[name], nested[name] != "":
+		case hub[name]:
 		default:
-			t.Errorf("%q is in no menu — add it to hubEntries, to a group menu, or set %s=false on it", name, annotationInteractive)
+			t.Errorf("%q is in no menu — add it to hubEntries, or set %s=false on it", name, annotationInteractive)
 		}
 	}
 }

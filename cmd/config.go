@@ -25,11 +25,11 @@ func newConfigCmd() *cobra.Command {
 		Use:   "config",
 		Short: "Configure rec-deploy interactively, or get/set values",
 		Args:  cobra.NoArgs,
-		Example: `  rec-deploy config
-  rec-deploy config path
-  rec-deploy config get listen
-  rec-deploy config set listen 0.0.0.0:9000
-  rec-deploy config set discovery.roots /var/www,/home/*/web/*/public_html`,
+		Example: `  rec-deploy repo config
+  rec-deploy repo config path
+  rec-deploy repo config get listen
+  rec-deploy repo config set listen 0.0.0.0:9000
+  rec-deploy repo config set discovery.roots /var/www,/home/*/web/*/public_html`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if isInteractive() {
 				return configMenu(cmd)
@@ -716,7 +716,7 @@ func printConfig() error {
 		})
 	}
 
-	ui.Title("rec-deploy config")
+	ui.Title("rec-deploy repo config")
 	ui.KeyValue("listen", cfg.Listen)
 	ui.KeyValue("public_url", orNotSet(cfg.PublicURL))
 	ui.KeyValue("github", redact(cfg.GitHub.Token))
@@ -724,7 +724,7 @@ func printConfig() error {
 	ui.KeyList("prune", cfg.Discovery.Prune)
 	ui.KeyValue("telegram", telegramSummary())
 	ui.KeyValue("email", emailSummary())
-	ui.Info("run in a terminal for the interactive form, or use `rec-deploy config set <key> <value>`")
+	ui.Info("run in a terminal for the interactive form, or use `rec-deploy repo config set <key> <value>`")
 
 	return nil
 }

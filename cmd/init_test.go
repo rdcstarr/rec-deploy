@@ -79,8 +79,8 @@ func TestInitNonInteractive(t *testing.T) {
 	if err == nil {
 		t.Fatal("init ran without a terminal, want an error")
 	}
-	if !strings.Contains(err.Error(), "rec-deploy config set") {
-		t.Errorf("error %q does not point at `rec-deploy config set`", err)
+	if !strings.Contains(err.Error(), "rec-deploy repo config set") {
+		t.Errorf("error %q does not point at `rec-deploy repo config set`", err)
 	}
 }
 

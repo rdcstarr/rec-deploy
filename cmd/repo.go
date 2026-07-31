@@ -43,7 +43,8 @@ func newRepoCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newRepoAddCmd(), newRepoListCmd(), newRepoShowCmd(),
-		newRepoInstallCmd(), newRepoRotateCmd(), newRepoRemoveCmd())
+		newRepoInstallCmd(), newRepoRotateCmd(), newRepoRemoveCmd(),
+		newDeployCmd(), newRollbackCmd(), newScanCmd(), newConfigCmd())
 
 	return cmd
 }
@@ -55,27 +56,8 @@ func repoMenu(cmd *cobra.Command) error {
 		Title:   ui.ScreenPath("rec-deploy", "Repositories"),
 		Options: repoMenuOptions,
 		Help:    func() string { return commandHelp(cmd) },
-		Handle:  func(choice string) error { return dispatch(repoDispatchFrom(cmd, choice), choice) },
+		Handle:  func(choice string) error { return dispatch(cmd, choice) },
 	}).Run()
-}
-
-// repoRootCommands are the repo-menu choices registered on the root rather than
-// as children of repo. dispatch builds its argument list from the command it
-// walks from, so starting at repo would build "repo deploy" — an argument list
-// cobra cannot find. They live on the root because that is where an operator
-// types them; the menu is where they are reached from.
-var repoRootCommands = map[string]bool{"deploy": true, "config": true, "scan": true, "rollback": true}
-
-// repoDispatchFrom resolves which command dispatch should walk from for one
-// repo-menu choice. Pulling this out of Handle as its own function is what lets
-// a test drive the decision directly, the same way inspect.go's
-// lifecycleOptions does for the service menu.
-func repoDispatchFrom(cmd *cobra.Command, choice string) *cobra.Command {
-	if repoRootCommands[choice] {
-		return cmd.Root()
-	}
-
-	return cmd
 }
 
 // repoMenuOptions lists what an operator does to a repository: the deploy they
@@ -803,7 +785,7 @@ func installRepo(ctx context.Context, slug, path string) error {
 		ui.Warn("⚠ root: this checkout is root-owned, so push access to " + slug + " is root on this server")
 	}
 	if !hasManifest {
-		ui.Info("commit a .rec-deploy.yml or .rec-deploy.yaml to the repository, then check `rec-deploy scan` picks the checkout up")
+		ui.Info("commit a .rec-deploy.yml or .rec-deploy.yaml to the repository, then check `rec-deploy repo scan` picks the checkout up")
 		return nil
 	}
 
@@ -1035,7 +1017,7 @@ func resolvePublicURL() (string, error) {
 		return url, nil
 	}
 
-	notSet := fmt.Errorf("public_url is not configured — run `rec-deploy init`, or `rec-deploy config set public_url http://<ip>:9000`")
+	notSet := fmt.Errorf("public_url is not configured — run `rec-deploy init`, or `rec-deploy repo config set public_url http://<ip>:9000`")
 	if !isInteractive() {
 		return "", notSet
 	}

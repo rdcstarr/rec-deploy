@@ -25,7 +25,7 @@ func newDeployCmd() *cobra.Command {
 		Short:   "Deploy a repository now",
 		Long:    "deploy runs the pipeline for every checkout of the repository on this server, on the branch each checkout is on.",
 		Args:    cobra.MaximumNArgs(1),
-		Example: "rec-deploy deploy rdcstarr/tema-mea\nrec-deploy deploy rdcstarr/tema-mea --path /var/www/api",
+		Example: "rec-deploy repo deploy rdcstarr/tema-mea\nrec-deploy repo deploy rdcstarr/tema-mea --path /var/www/api",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slug, ok, err := pickRepo(cmd.Context(), args, "Repository to deploy")
 			if err != nil {
@@ -54,7 +54,7 @@ func newRollbackCmd() *cobra.Command {
 		Short:   "Reset a repository's checkouts to their previous commit",
 		Long:    "rollback resets every checkout of the repository to the commit it was on before the last deploy, then re-runs the pipeline of the tree it lands on — the manifest versions with the code, so the previous commit's pipeline is the right one to run.",
 		Args:    cobra.MaximumNArgs(1),
-		Example: "rec-deploy rollback rdcstarr/tema-mea\nrec-deploy rollback rdcstarr/tema-mea --path /var/www/api --yes",
+		Example: "rec-deploy repo rollback rdcstarr/tema-mea\nrec-deploy repo rollback rdcstarr/tema-mea --path /var/www/api --yes",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slug, ok, err := pickRepo(cmd.Context(), args, "Repository to roll back")
 			if err != nil {
@@ -352,7 +352,7 @@ func rollbackTargets(ctx context.Context, st *store.Store, slug, path string) (m
 		return nil, err
 	}
 	if len(deploys) == 0 {
-		return nil, fmt.Errorf("%s has never been deployed from this server, so there is no commit to roll back to — deploy it first with `rec-deploy deploy %s`", slug, slug)
+		return nil, fmt.Errorf("%s has never been deployed from this server, so there is no commit to roll back to — deploy it first with `rec-deploy repo deploy %s`", slug, slug)
 	}
 
 	paths, err := st.DeployPaths(ctx, deploys[0].ID)

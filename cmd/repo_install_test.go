@@ -88,55 +88,30 @@ func TestCloneDestinationEntriesIncludesHiddenDirectories(t *testing.T) {
 	}
 }
 
-// TestRepoMenuRoutesEveryChoice pins what the repo menu offers and that each
-// choice resolves against the right command: deploy, config, scan and rollback
-// are root-level commands, not children of repo, and repo's Handle has to dispatch
-// them from cmd.Root() or the choice fails to resolve. The table also pins
-// every other entry to repo itself, so a routing regression on any of them
-// fails here too, and its length is checked against repoMenuOptions() so the
-// two cannot drift apart — an entry added to one without the other is a test
-// failure, not a silent gap in coverage.
-func TestRepoMenuRoutesEveryChoice(t *testing.T) {
+// TestRepoMenuOptionsAreReachable pins the invariant this change makes
+// structural: every entry the repo menu offers must resolve to a genuine
+// child of `repo`. Before this change, four of the ten entries — deploy,
+// rollback, scan, config — lived on the root instead, and repoDispatchFrom
+// quietly redirected dispatch to walk from there so the split never showed up
+// on screen. Now that the CLI mirrors the TUI hierarchy and that special case
+// is gone, a menu entry added without a matching subcommand of repo fails
+// here, rather than only the moment an operator picks it.
+func TestRepoMenuOptionsAreReachable(t *testing.T) {
 	root := newRootCmd()
 	repo, _, err := root.Find([]string{"repo"})
 	if err != nil {
 		t.Fatalf("find the repo command: %v", err)
 	}
 
-	// value -> dispatches from root (true) or from repo itself (false).
-	routing := map[string]bool{
-		"deploy":   true,
-		"config":   true,
-		"add":      false,
-		"list":     false,
-		"show":     false,
-		"scan":     true,
-		"install":  false,
-		"rotate":   false,
-		"rollback": true,
-		"remove":   false,
-	}
-
-	options := repoMenuOptions()
-	if len(options) != len(routing) {
-		t.Fatalf("repoMenuOptions returned %d entries, routing table covers %d — keep them in step:\n%v", len(options), len(routing), options)
-	}
-
-	for _, option := range options {
-		fromRoot, known := routing[option.Value]
-		if !known {
-			t.Errorf("repoMenuOptions offers %q, which the routing table does not cover", option.Value)
+	for _, option := range repoMenuOptions() {
+		target, remaining, err := repo.Find([]string{option.Value})
+		if err != nil {
+			t.Errorf("repoMenuOptions offers %q: %v", option.Value, err)
 
 			continue
 		}
-
-		want := repo
-		if fromRoot {
-			want = root
-		}
-
-		if got := repoDispatchFrom(repo, option.Value); got != want {
-			t.Errorf("repoDispatchFrom(repo, %q) did not dispatch from the expected command", option.Value)
+		if target == repo || len(remaining) != 0 {
+			t.Errorf("repoMenuOptions offers %q, which does not resolve to a subcommand of repo", option.Value)
 		}
 	}
 }

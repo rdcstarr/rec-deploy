@@ -114,11 +114,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVar(&flagYes, "yes", false, "assume yes for destructive confirmations")
 
 	root.AddCommand(newInitCmd())
-	root.AddCommand(newConfigCmd())
 	root.AddCommand(newRepoCmd())
-	root.AddCommand(newDeployCmd())
-	root.AddCommand(newRollbackCmd())
-	root.AddCommand(newScanCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newServiceCmd())
 	root.AddCommand(newLogsCmd())

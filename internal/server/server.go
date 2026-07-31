@@ -205,7 +205,7 @@ func hook(w http.ResponseWriter, r *http.Request, s *Server) {
 	if delivery == "" {
 		// The replay guard is a unique index that is partial on NULL, and
 		// DeployStart deliberately stores an empty id as NULL so that a manual
-		// `rec-deploy deploy` never collides with another. A webhook that omits
+		// `rec-deploy repo deploy` never collides with another. A webhook that omits
 		// the header would take that same path: the index would not cover it, and
 		// a captured signed request could be replayed to re-deploy without limit.
 		// GitHub always sends this header, so its absence is a malformed request,

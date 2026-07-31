@@ -218,7 +218,7 @@ func targets(ctx context.Context, opts Options) ([]discover.Installation, error)
 	}
 
 	if len(found) == 0 {
-		return nil, fmt.Errorf("no installation of %s found under the discovery roots — run `rec-deploy scan` to see what discovery finds", opts.Repository)
+		return nil, fmt.Errorf("no installation of %s found under the discovery roots — run `rec-deploy repo scan` to see what discovery finds", opts.Repository)
 	}
 
 	return found, nil
