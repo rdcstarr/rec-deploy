@@ -48,7 +48,7 @@ func newConfigCmd() *cobra.Command {
 // out, running the chosen section's form and saving what it collected.
 func configMenu(cmd *cobra.Command) error {
 	return (ui.Menu{
-		Title:      ui.ScreenPath("rec-deploy", "Config"),
+		Title:      ui.ScreenPath("rec-deploy", "Repositories", "Config"),
 		Options:    configMenuOptions,
 		Help:       func() string { return menuHelp },
 		BackValues: map[string]bool{"exit": true},
@@ -71,7 +71,7 @@ func configMenuOptions() []ui.Option {
 // openConfigSection opens a scoped overview before editing one setting. Secret
 // values stay masked here and can be revealed only inside their own editor.
 func openConfigSection(cmd *cobra.Command, section string) error {
-	return openSettingsSection(cmd, section, ui.ScreenPath("rec-deploy", "Config", configSectionTitle(section)))
+	return openSettingsSection(cmd, section, ui.ScreenPath("rec-deploy", "Repositories", "Config", configSectionTitle(section)))
 }
 
 // openSettingsSection is the section editor both `config` and `notifications`

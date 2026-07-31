@@ -89,13 +89,24 @@ func TestCloneDestinationEntriesIncludesHiddenDirectories(t *testing.T) {
 }
 
 // TestRepoMenuOptionsAreReachable pins the invariant this change makes
-// structural: every entry the repo menu offers must resolve to a genuine
-// child of `repo`. Before this change, four of the ten entries — deploy,
+// structural, in both directions: every entry the repo menu offers must
+// resolve to a genuine child of `repo`, and every child of `repo` must be
+// offered by the menu. Before this change, four of the ten entries — deploy,
 // rollback, scan, config — lived on the root instead, and repoDispatchFrom
 // quietly redirected dispatch to walk from there so the split never showed up
-// on screen. Now that the CLI mirrors the TUI hierarchy and that special case
-// is gone, a menu entry added without a matching subcommand of repo fails
-// here, rather than only the moment an operator picks it.
+// on screen; now that the CLI mirrors the TUI hierarchy and that special case
+// is gone, a menu entry added without a matching subcommand fails here rather
+// than only the moment an operator picks it. The count check catches the
+// opposite mistake, which CLAUDE.md forbids just as directly ("wire it into
+// the group's menu in the same change"): a subcommand added to repo with no
+// menu entry would otherwise work from the shell yet stay invisible in the
+// TUI, with every other test still green.
+//
+// repo.Find returns a nil error for an argument that matches no subcommand —
+// cobra's legacyArgs only validates a command with no parent, and repo has
+// one — so it is the len(remaining) != 0 check below, not err, that actually
+// detects a menu entry with nothing to resolve to. Do not simplify this to
+// `if err != nil`; that would silently stop checking anything.
 func TestRepoMenuOptionsAreReachable(t *testing.T) {
 	root := newRootCmd()
 	repo, _, err := root.Find([]string{"repo"})
@@ -103,7 +114,12 @@ func TestRepoMenuOptionsAreReachable(t *testing.T) {
 		t.Fatalf("find the repo command: %v", err)
 	}
 
-	for _, option := range repoMenuOptions() {
+	options := repoMenuOptions()
+	if len(options) != len(repo.Commands()) {
+		t.Fatalf("repoMenuOptions has %d entries, repo has %d subcommands — keep them in step", len(options), len(repo.Commands()))
+	}
+
+	for _, option := range options {
 		target, remaining, err := repo.Find([]string{option.Value})
 		if err != nil {
 			t.Errorf("repoMenuOptions offers %q: %v", option.Value, err)

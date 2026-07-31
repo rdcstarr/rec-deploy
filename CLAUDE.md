@@ -186,7 +186,7 @@ interactive UI. A module is not "done" until it has both.
   read-only viewer that erases itself on exit, and the **config section editor**, whose
   screen is the live list of values being edited. Nothing else earns an exception.
 - **Show progress for blocking work — never a dead pause.** Wrap it with
-  `ui.Spinner(title, func() error { … })`. **A deploy is no exception: `rec-deploy deploy`
+  `ui.Spinner(title, func() error { … })`. **A deploy is no exception: `rec-deploy repo deploy`
   suppresses all of it.** The git plumbing — `fetch`, `reset`, `clean`, `clone`,
   `rev-parse` — spins step by step, and the whole `post_deploy` pipeline runs under one
   `Running post_deploy…` spinner. The terminal shows only the per-checkout result line;

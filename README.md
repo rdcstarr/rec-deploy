@@ -412,10 +412,10 @@ install, a rotate, a status report is a thing you asked for, and drawing a menu 
 under its result would bury exactly what you came to read. A menu therefore exists only
 *before* a result, never after one: no screen asks "what next?" about a question it has
 already answered. Only navigation stays in the TUI — backing out of a screen (`Esc` / `←`)
-returns to the menu above it, and the group hubs (`repo`, `config`, `service`, `mcp`) keep
-their menu open while you move between their own entries. Two screens are read-and-return
-by design, because there the screen *is* the result: the `logs` browser and the `config`
-section editor. Any blocking step — a GitHub API call, a host-key pin, a Cloudflare tunnel coming
+returns to the menu above it, and the group hubs (`repo`, `service`, `mcp`, and `repo config`
+one level in) keep their menu open while you move between their own entries. Two screens are
+read-and-return by design, because there the screen *is* the result: the `logs` browser and the
+`config` section editor. Any blocking step — a GitHub API call, a host-key pin, a Cloudflare tunnel coming
 up, a test notification — shows a labelled spinner that names what it is waiting for and
 clears when it is done, so a slow network call never looks like a freeze. A deploy is no
 exception: the git around it (`clone`, `fetch`, `reset`, `clean`) and the `post_deploy`
@@ -427,9 +427,11 @@ step — stays in `rec-deploy logs`.
 
 The bare `rec-deploy` hub above is curated, not exhaustive: `repo`, `logs`, `status`,
 `service`, `notifications`, `mcp`, `self-update` and `uninstall`, plus `init` until the setup
-wizard has run to completion. `deploy`, `config`, `scan` and `rollback` are reached from the
-`repo` menu — every command above stays fully typable and listed in `--help` whether or not
-the hub shows it on its first screen.
+wizard has run to completion — every command above stays fully typable and listed in
+`--help` whether or not the hub shows it on its first screen. `repo`'s own menu works the
+same way one level in: `deploy`, `config`, `scan` and `rollback` sit beside `add`, `list`,
+`show`, `install`, `rotate` and `remove` there, each just as typable as `rec-deploy repo
+<command>` and listed under `rec-deploy repo --help`.
 
 Choosing `deploy` or `logs` on a server with no repository registered is a first run, not
 an error: in a terminal it offers to register one and runs `repo add` if you say yes, and

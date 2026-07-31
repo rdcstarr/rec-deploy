@@ -26,7 +26,7 @@ CREATE TABLE deploys (
 );
 
 -- The replay guard: a repeated X-GitHub-Delivery cannot start a second deploy.
--- Partial, so the NULL delivery_id of a manual `rec-deploy deploy` never collides.
+-- Partial, so the NULL delivery_id of a manual `rec-deploy repo deploy` never collides.
 CREATE UNIQUE INDEX deploys_delivery_id ON deploys(delivery_id) WHERE delivery_id IS NOT NULL;
 
 CREATE INDEX deploys_repo_id ON deploys(repo_id, started_at DESC);
