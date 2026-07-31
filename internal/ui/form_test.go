@@ -53,6 +53,22 @@ func TestFormFooterShowsBackAndQuit(t *testing.T) {
 	}
 }
 
+// TestFormFooterSitsOffTheInput pins the blank line between a form's last row
+// and its footer. huh's view carries no trailing newline, unlike every other
+// screen's body, so without it the hint crowds the input and the form is the one
+// screen whose spacing reads differently.
+func TestFormFooterSitsOffTheInput(t *testing.T) {
+	var v string
+	f := huh.NewForm(huh.NewGroup(huh.NewInput().Title("GitHub token").Value(&v))).WithKeyMap(formKeyMap())
+	f.Init()
+
+	footer := formFooter(false, false)
+	view := formModel{form: f, footer: footer}.View().Content
+	if !strings.HasSuffix(view, "\n\n"+footer) {
+		t.Errorf("footer is not preceded by a blank line:\n%q", view[max(0, len(view)-80):])
+	}
+}
+
 // TestCompletedFormRendersNothing is the whole reason interactive output used to
 // be littered with blank lines. huh renders "" once a form is submitted, so
 // appending the footer to it left a two-row final frame — and bubbletea's

@@ -264,8 +264,12 @@ func (m formModel) View() tea.View {
 	if view == "" {
 		return tea.NewView("")
 	}
+	// The blank line is what every other screen gets for free: their bodies end
+	// in a newline before the footer's own, so the hint sits off the content.
+	// huh's view carries no trailing newline, so without this the footer crowds
+	// the input row and the form is the one screen whose spacing reads wrong.
 	if m.footer != "" {
-		view += "\n" + m.footer
+		view += "\n\n" + m.footer
 	}
 
 	// Focus reporting moved from a program option onto the view in bubbletea v2,
