@@ -2,44 +2,20 @@ package sshkey
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
-	"time"
-)
 
-// metaURL is GitHub's published metadata, including its current SSH host keys.
-// It is a var so the tests can point it at an httptest server.
-var metaURL = "https://api.github.com/meta"
+	"github.com/rdcstarr/rec-deploy/internal/github"
+)
 
 // FetchHostKeys returns github.com's current SSH host keys, straight from
 // GitHub. Pinning these is what replaces the old implementation's
 // StrictHostKeyChecking=no, which verifies nothing.
 func FetchHostKeys(ctx context.Context) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
+	meta, err := github.FetchMeta(ctx)
 	if err != nil {
 		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch github host keys: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch github host keys: %s", resp.Status)
-	}
-
-	var meta struct {
-		SSHKeys []string `json:"ssh_keys"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
-		return nil, fmt.Errorf("decode github meta: %w", err)
 	}
 	if len(meta.SSHKeys) == 0 {
 		return nil, fmt.Errorf("github returned no ssh host keys")

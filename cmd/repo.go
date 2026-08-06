@@ -43,7 +43,7 @@ func newRepoCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newRepoAddCmd(), newRepoListCmd(), newRepoShowCmd(),
-		newRepoInstallCmd(), newRepoRotateCmd(), newRepoRemoveCmd(),
+		newRepoCheckCmd(), newRepoInstallCmd(), newRepoRotateCmd(), newRepoRemoveCmd(),
 		newDeployCmd(), newRollbackCmd(), newScanCmd(), newConfigCmd())
 
 	return cmd
@@ -70,6 +70,7 @@ func repoMenuOptions() []ui.Option {
 		ui.DescribedOption{Name: "add", Description: "register a repository: deploy key + webhook", Value: "add"},
 		ui.DescribedOption{Name: "list", Description: "every registered repository", Value: "list"},
 		ui.DescribedOption{Name: "show", Description: "one repository and its installations", Value: "show"},
+		ui.DescribedOption{Name: "check", Description: "can GitHub actually deliver a webhook here?", Value: "check"},
 		ui.DescribedOption{Name: "scan", Description: "every checkout discovery finds on this server", Value: "scan"},
 		ui.DescribedOption{Name: "install", Description: "clone a repository into a path", Value: "install"},
 		ui.DescribedOption{Name: "rotate", Description: "roll the webhook secret and the deploy key", Value: "rotate"},
@@ -81,7 +82,9 @@ func repoMenuOptions() []ui.Option {
 // newRepoAddCmd builds `repo add owner/repo`: generate the deploy key, upload it
 // read-only, register this server's webhook, and persist the IDs.
 func newRepoAddCmd() *cobra.Command {
-	return &cobra.Command{
+	var skipCheck bool
+
+	cmd := &cobra.Command{
 		Use:     "add <owner/repo>",
 		Short:   "Register a repository: deploy key + webhook",
 		Args:    cobra.MaximumNArgs(1),
@@ -95,15 +98,24 @@ func newRepoAddCmd() *cobra.Command {
 				return cmd.Help()
 			}
 
-			return repoAdd(cmd.Context(), slug)
+			return repoAdd(cmd.Context(), slug, skipCheck)
 		},
 	}
+
+	cmd.Flags().BoolVar(&skipCheck, "skip-check", false, "register without checking that GitHub can reach this server")
+
+	return cmd
 }
 
 // repoAdd registers slug on GitHub and on this server. Everything it creates on
 // GitHub is undone if any later step fails: a half-registered repository — a key
 // or a hook nobody here points at — is worse than none.
-func repoAdd(ctx context.Context, slug string) error {
+//
+// The registration is then verified end to end, because a key and a hook that
+// exist say nothing about GitHub being able to reach this server: behind a
+// firewall that drops the listen port, every step below succeeds and
+// push-to-deploy silently does nothing. A bad verdict is reported, never undone.
+func repoAdd(ctx context.Context, slug string, skipCheck bool) error {
 	if err := github.ValidateSlug(slug); err != nil {
 		return err
 	}
@@ -179,30 +191,47 @@ func repoAdd(ctx context.Context, slug string) error {
 		return abortAdd(ctx, client, slug, keyID, hookID, err)
 	}
 
-	if _, err := st.RepoInsert(ctx, store.Repo{
+	repo := store.Repo{
 		Repository:   slug,
 		Token:        hookToken,
 		Secret:       secret,
 		GitHubKeyID:  keyID,
 		GitHubHookID: hookID,
-	}); err != nil {
+	}
+	if _, err := st.RepoInsert(ctx, repo); err != nil {
 		_ = sshkey.Remove(keysDir, slug)
 
 		return abortAdd(ctx, client, slug, keyID, hookID, err)
+	}
+
+	// Only now, with the row committed. GitHub's own creation ping races this
+	// insert, and one that arrives first finds no repository and is answered 404
+	// — a healthy server reported as broken. verifyWebhook triggers its own.
+	var verdict github.Reachability
+	if !skipCheck {
+		verdict = verifyWebhook(ctx, client, repo)
 	}
 
 	if flagJSON {
 		// The hook URL carries the delivery token in its path, so --json reports the
 		// public URL and the token's state instead — a captured CI log or artifact
 		// never records the live token. rotate's --json does the same.
-		return ui.PrintJSON(map[string]any{
+		out := map[string]any{
 			"repository": slug,
 			"public_url": publicURL,
 			"token":      "set",
 			"secret":     "set",
 			"key_id":     keyID,
 			"hook_id":    hookID,
-		})
+		}
+		if !skipCheck {
+			out["webhook"] = reachabilityJSON(verdict)
+		}
+		if err := ui.PrintJSON(out); err != nil {
+			return err
+		}
+
+		return webhookExit(verdict, nil)
 	}
 
 	ui.Success("registered " + slug)
@@ -214,9 +243,19 @@ func repoAdd(ctx context.Context, slug string) error {
 	ui.KeyValue("key id", strconv.FormatInt(keyID, 10))
 	ui.KeyValue("hook id", strconv.FormatInt(hookID, 10))
 	ui.KeyValue("deploy key", key.Public)
-	ui.Info("clone it with `rec-deploy repo install " + slug + " <path>`, or push to deploy an existing checkout")
 
-	return nil
+	if !skipCheck {
+		ui.Out("")
+		renderReachability(ctx, slug, publicURL, verdict)
+	}
+	if verdict.State != github.Failed {
+		ui.Info("clone it with `rec-deploy repo install " + slug + " <path>`, or push to deploy an existing checkout")
+	}
+
+	// The repository IS registered — a bad verdict is reported, never rolled back.
+	// The operator needs the key and the hook to stay while they open the firewall,
+	// or the fix would mean re-running the whole registration.
+	return webhookExit(verdict, nil)
 }
 
 // abortAdd reports cause after deleting whatever the registration already
@@ -599,21 +638,33 @@ func rotateRepo(ctx context.Context, slug string) error {
 		ui.Warn(fmt.Sprintf("the old deploy key is still on github: %v — delete key %d in the settings of %s", err, oldKeyID, slug))
 	}
 
+	// Rotation is the one command that can break the chain end to end: GitHub
+	// signs with the new secret from here on, and a ping is what proves this
+	// server verifies it.
+	verdict := verifyWebhook(ctx, client, repo)
+
 	if flagJSON {
-		return ui.PrintJSON(map[string]any{
+		if err := ui.PrintJSON(map[string]any{
 			"repository": slug,
 			"secret":     "set",
 			"key_id":     keyID,
 			"hook_id":    repo.GitHubHookID,
-		})
+			"webhook":    reachabilityJSON(verdict),
+		}); err != nil {
+			return err
+		}
+
+		return webhookExit(verdict, nil)
 	}
 
 	ui.Success("rotated " + slug)
 	ui.KeyValue("secret", redact(secret))
 	ui.KeyValue("key id", strconv.FormatInt(keyID, 10))
 	ui.KeyValue("deploy key", key.Public)
+	ui.Out("")
+	renderReachability(ctx, slug, publicURL, verdict)
 
-	return nil
+	return webhookExit(verdict, nil)
 }
 
 // newRepoInstallCmd builds `repo install owner/repo PATH`.
@@ -972,7 +1023,7 @@ func offerFirstRepo(ctx context.Context) error {
 	if !ok {
 		return ui.ErrBack
 	}
-	if err := repoAdd(ctx, slug); err != nil {
+	if err := repoAdd(ctx, slug, false); err != nil {
 		return err
 	}
 

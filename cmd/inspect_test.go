@@ -14,6 +14,7 @@ import (
 	"github.com/rdcstarr/rec-deploy/internal/config"
 	"github.com/rdcstarr/rec-deploy/internal/deploy"
 	"github.com/rdcstarr/rec-deploy/internal/discover"
+	"github.com/rdcstarr/rec-deploy/internal/github"
 	"github.com/rdcstarr/rec-deploy/internal/store"
 	"github.com/rdcstarr/rec-deploy/internal/ui"
 	"github.com/rdcstarr/rec-deploy/internal/units"
@@ -90,6 +91,7 @@ func TestStatusOverviewPrioritizesProblems(t *testing.T) {
 			[]units.Status{{Unit: "rec-deploy.service", State: units.StateStale}},
 			nil,
 			[]store.DeployPath{{Path: "/srv/app", Status: store.StatusFailed}},
+			nil,
 		)
 	})
 
@@ -105,6 +107,31 @@ func TestStatusOverviewPrioritizesProblems(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// A webhook that broke after registration is what nobody thinks to ask about, so
+// status has to raise it unprompted — and a webhook whose state could not be read
+// must not be raised at all, because that says nothing about the webhook.
+func TestStatusOverviewRaisesABrokenWebhook(t *testing.T) {
+	repos := []store.Repo{{Repository: "rdcstarr/tema"}, {Repository: "rdcstarr/alta"}}
+
+	out := capture(t, func() {
+		renderStatusOverview(true, "http://127.0.0.1:9000/health", false, false, nil, repos, nil,
+			[]webhookState{
+				{Repository: "rdcstarr/tema", Known: true, Delivery: github.Delivery{
+					ID: 1, Status: "failed to connect to host", StatusCode: 502,
+				}},
+				{Repository: "rdcstarr/alta"},
+			},
+		)
+	})
+
+	if !strings.Contains(out, "rec-deploy repo check rdcstarr/tema") {
+		t.Errorf("status does not raise the broken webhook:\n%s", out)
+	}
+	if strings.Contains(out, "rdcstarr/alta") {
+		t.Errorf("status raised a webhook it could not read:\n%s", out)
 	}
 }
 

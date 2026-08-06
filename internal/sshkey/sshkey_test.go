@@ -13,9 +13,11 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+
+	"github.com/rdcstarr/rec-deploy/internal/github"
 )
 
-// serveMeta points metaURL at a stub /meta for the duration of the test.
+// serveMeta points the /meta fetch at a stub for the duration of the test.
 func serveMeta(t *testing.T, body string) {
 	t.Helper()
 
@@ -24,9 +26,9 @@ func serveMeta(t *testing.T, body string) {
 	}))
 	t.Cleanup(srv.Close)
 
-	previous := metaURL
-	metaURL = srv.URL
-	t.Cleanup(func() { metaURL = previous })
+	previous := github.MetaURL
+	github.MetaURL = srv.URL
+	t.Cleanup(func() { github.MetaURL = previous })
 }
 
 func TestGenerateProducesAnEd25519Pair(t *testing.T) {

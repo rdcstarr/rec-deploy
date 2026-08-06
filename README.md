@@ -223,6 +223,15 @@ deploy key, and creates a `push` webhook on the repo pointing at this server's p
 with a fresh HMAC secret. `rec-deploy repo remove` deletes both **on GitHub**, not just
 locally; `rec-deploy repo rotate` rolls the secret and the key.
 
+A key and a hook that exist say nothing about GitHub being able to *reach* this server,
+so `repo add` then proves it: it asks GitHub to deliver a ping and reads back what
+happened to it. The daemon answers a ping only after the HMAC check, so a delivered ping
+proves the public address, the firewall, the URL path and the shared secret at once. If it
+does not arrive, the registration stands — you need the key and the hook while you open
+the port — and the command names the port, the ranges GitHub delivers from, and exits
+non-zero when it is not a terminal. `--skip-check` opts out; `rec-deploy repo check` asks
+again later.
+
 **4. Get the code onto the box.** Either clone it yourself, or:
 
 ```sh
@@ -380,9 +389,10 @@ rec-deploy                              # interactive hub (TTY) / help (piped)
 rec-deploy init                         # setup wizard: token, listen, public URL, roots, notifications
 rec-deploy serve                        # webhook daemon (systemd)
 
-rec-deploy repo add <owner/repo>                  # keygen + upload deploy key + create webhook
+rec-deploy repo add <owner/repo> [--skip-check]   # keygen + upload deploy key + create webhook, then verify GitHub can reach here
 rec-deploy repo list                              # registered repositories
 rec-deploy repo show <owner/repo>                 # key id, hook id, checkouts, last deploy
+rec-deploy repo check <owner/repo>                # can GitHub actually deliver a webhook here?
 rec-deploy repo remove <owner/repo>               # deletes the key and the hook on GitHub too
 rec-deploy repo rotate <owner/repo>               # roll the HMAC secret and the deploy key
 rec-deploy repo install <owner/repo> <path>       # clone into path as its owner
@@ -391,7 +401,7 @@ rec-deploy repo rollback <owner/repo> [--path P]  # back to the previous SHA
 rec-deploy repo scan                              # what discovery finds, and why
 rec-deploy repo config get <key> | set <key> <value> | path
 
-rec-deploy status                       # daemon health, repos, last deploy per path
+rec-deploy status                       # daemon health, repos, webhook delivery, last deploy per path
 rec-deploy service start|stop|restart   # the systemd unit that runs the daemon
 rec-deploy logs [owner/repo]            # deploy history
 rec-deploy notifications [test]         # channel settings; test probes one channel or all of them

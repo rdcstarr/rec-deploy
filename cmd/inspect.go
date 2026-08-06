@@ -129,11 +129,16 @@ func showStatus(ctx context.Context) error {
 		return err
 	}
 
-	// The probe blocks for up to two seconds and prints nothing of its own.
+	// The probes block for a few seconds and print nothing of their own. The
+	// delivery read is what makes a webhook that broke *after* registration
+	// visible without being asked about; it degrades to "unknown" and can never
+	// fail the report.
 	url := healthURL(Config())
 	var up bool
-	if err := ui.Spinner("Probing the daemon…", func() error {
+	var webhooks []webhookState
+	if err := ui.Spinner("Probing the daemon and github…", func() error {
 		up = daemonUp(ctx, url)
+		webhooks = lastDeliveries(ctx, repos)
 
 		return nil
 	}); err != nil {
@@ -146,6 +151,7 @@ func showStatus(ctx context.Context) error {
 			"auto_update":  systemd.IsEnabled(ctx, updateTimer),
 			"units":        unitStates(ctx),
 			"repositories": repoStates(repos),
+			"webhooks":     webhookJSON(webhooks),
 			"paths":        pathStates(paths),
 		})
 	}
@@ -153,10 +159,10 @@ func showStatus(ctx context.Context) error {
 	autoUpdate := systemd.IsEnabled(ctx, updateTimer)
 	states := unitStates(ctx)
 	ui.Title(ui.ScreenPath("rec-deploy", "Status"))
-	renderStatusOverview(up, url, systemd.Available(), autoUpdate, states, repos, paths)
+	renderStatusOverview(up, url, systemd.Available(), autoUpdate, states, repos, paths, webhooks)
 	ui.Out("")
 
-	renderRepoStates(repos)
+	renderRepoStates(repos, webhooks)
 	ui.Out("")
 	renderPathStates(paths)
 
@@ -165,7 +171,7 @@ func showStatus(ctx context.Context) error {
 
 // renderStatusOverview puts actionable failures before healthy facts so an
 // operator can answer "what needs attention?" without scanning every detail.
-func renderStatusOverview(up bool, url string, systemdAvailable, autoUpdate bool, states []units.Status, repos []store.Repo, paths []store.DeployPath) {
+func renderStatusOverview(up bool, url string, systemdAvailable, autoUpdate bool, states []units.Status, repos []store.Repo, paths []store.DeployPath, webhooks []webhookState) {
 	var issues, healthy []string
 	if up {
 		healthy = append(healthy, "daemon answering at "+url)
@@ -199,6 +205,17 @@ func renderStatusOverview(up bool, url string, systemdAvailable, autoUpdate bool
 		issues = append(issues, "no repository registered — run `rec-deploy repo add <owner/repo>`")
 	} else {
 		healthy = append(healthy, plural(len(repos), "repository")+" registered")
+	}
+	delivering := 0
+	for _, w := range webhooks {
+		if _, issue := deliveryFlag(w); issue != "" {
+			issues = append(issues, issue)
+		} else if w.Known && w.Delivery.OK() {
+			delivering++
+		}
+	}
+	if delivering > 0 {
+		healthy = append(healthy, plural(delivering, "webhook")+" delivering to this server")
 	}
 	failed := 0
 	for _, path := range paths {
@@ -299,17 +316,27 @@ func pathStates(paths []store.DeployPath) []map[string]any {
 }
 
 // renderRepoStates lists the registered repositories with their webhook address,
-// the token in it masked.
-func renderRepoStates(repos []store.Repo) {
+// the token in it masked, and what GitHub's last delivery to it did.
+func renderRepoStates(repos []store.Repo, webhooks []webhookState) {
 	if len(repos) == 0 {
 		ui.Warn("no repository is registered — run `rec-deploy repo add <owner/repo>`")
 
 		return
 	}
 
+	delivery := make(map[string]string, len(webhooks))
+	for _, w := range webhooks {
+		flag, _ := deliveryFlag(w)
+		delivery[w.Repository] = flag
+	}
+
 	rows := make([][2]string, 0, len(repos))
 	for _, r := range repos {
-		rows = append(rows, [2]string{r.Repository, redactedHookURL(r.Token)})
+		desc := redactedHookURL(r.Token)
+		if flag := delivery[r.Repository]; flag != "" {
+			desc += "  " + flag
+		}
+		rows = append(rows, [2]string{r.Repository, desc})
 	}
 
 	ui.Title("repositories")
