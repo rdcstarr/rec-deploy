@@ -840,8 +840,22 @@ func installRepo(ctx context.Context, slug, path string) error {
 		return nil
 	}
 
-	ui.Info("manifest found — running post_deploy")
-	return runDeploy(ctx, repo.Repository, path)
+	// A repository being installed for the first time is a first install by
+	// definition, so its setup block runs here and only here without being asked
+	// for. A manifest with no setup block deploys exactly as it always has.
+	m, err := manifest.Load(path)
+	if err != nil {
+		return err
+	}
+
+	setup := len(m.Setup) > 0
+	if setup {
+		ui.Info("manifest found — running setup, then post_deploy")
+	} else {
+		ui.Info("manifest found — running post_deploy")
+	}
+
+	return runDeploy(ctx, repo.Repository, path, setup)
 }
 
 var errCloneDestinationNotEmpty = errors.New("clone destination is not empty")

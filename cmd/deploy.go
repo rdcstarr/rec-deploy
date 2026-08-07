@@ -18,14 +18,20 @@ import (
 
 // newDeployCmd builds `deploy owner/repo`: deploy now, one result line per checkout.
 func newDeployCmd() *cobra.Command {
-	var path string
+	var (
+		path  string
+		setup bool
+	)
 
 	cmd := &cobra.Command{
-		Use:     "deploy <owner/repo>",
-		Short:   "Deploy a repository now",
-		Long:    "deploy runs the pipeline for every checkout of the repository on this server, on the branch each checkout is on.",
-		Args:    cobra.MaximumNArgs(1),
-		Example: "rec-deploy repo deploy rdcstarr/tema-mea\nrec-deploy repo deploy rdcstarr/tema-mea --path /var/www/api",
+		Use:   "deploy <owner/repo>",
+		Short: "Deploy a repository now",
+		Long: "deploy runs the pipeline for every checkout of the repository on this server, on the branch each checkout is on. " +
+			"With --setup it runs the manifest's setup block first — the steps that are true once, on top of the ordinary pipeline.",
+		Args: cobra.MaximumNArgs(1),
+		Example: "rec-deploy repo deploy rdcstarr/tema-mea\n" +
+			"rec-deploy repo deploy rdcstarr/tema-mea --path /var/www/api\n" +
+			"rec-deploy repo deploy rdcstarr/tema-mea --setup",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slug, ok, err := pickRepo(cmd.Context(), args, "Repository to deploy")
 			if err != nil {
@@ -35,11 +41,12 @@ func newDeployCmd() *cobra.Command {
 				return cmd.Help()
 			}
 
-			return runDeploy(cmd.Context(), slug, path)
+			return runDeploy(cmd.Context(), slug, path, setup)
 		},
 	}
 
 	cmd.Flags().StringVar(&path, "path", "", "deploy only this checkout")
+	cmd.Flags().BoolVar(&setup, "setup", false, "run the manifest's setup block before post_deploy")
 
 	return cmd
 }
@@ -76,7 +83,9 @@ func newRollbackCmd() *cobra.Command {
 // runDeploy deploys slug. The pipeline runs suppressed under a spinner and only
 // the per-checkout result line reaches the terminal; the full output is in
 // `rec-deploy logs`. It passes no Ref: every checkout deploys the branch it is on.
-func runDeploy(ctx context.Context, slug, path string) error {
+// setup prepends the manifest's setup block, for a first install or one the
+// operator asked to repeat.
+func runDeploy(ctx context.Context, slug, path string, setup bool) error {
 	cfg := Config()
 
 	st, err := openStore(ctx)
@@ -103,13 +112,25 @@ func runDeploy(ctx context.Context, slug, path string) error {
 	if err != nil {
 		return err
 	}
+	opts.Setup = setup
+
 	if !flagJSON {
-		ui.Title("deploying " + repo.Repository)
+		title := "deploying "
+		if setup {
+			title = "setting up "
+		}
+		ui.Title(title + repo.Repository)
+	}
+
+	pipeline := store.PipelinePostDeploy
+	if setup {
+		pipeline = store.PipelineSetup
 	}
 
 	deployID, err := st.DeployStart(ctx, store.Deploy{
-		RepoID: repo.ID,
-		Status: store.StatusRunning,
+		RepoID:   repo.ID,
+		Pipeline: pipeline,
+		Status:   store.StatusRunning,
 	})
 	if err != nil {
 		return err

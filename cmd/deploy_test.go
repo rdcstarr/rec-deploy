@@ -261,3 +261,18 @@ func TestResultFlagsKeepsAFailureReasonOffTheSummaryLine(t *testing.T) {
 		t.Errorf("resultFlags of a skip = %q, want the reason inline", skipped)
 	}
 }
+
+func TestDeployCmdHasASetupFlag(t *testing.T) {
+	cmd := newDeployCmd()
+
+	f := cmd.Flags().Lookup("setup")
+	if f == nil {
+		t.Fatal("--setup is not registered")
+	}
+	if f.DefValue != "false" {
+		t.Errorf("--setup default = %q, want false", f.DefValue)
+	}
+	if !strings.Contains(f.Usage, "setup") {
+		t.Errorf("--setup usage = %q", f.Usage)
+	}
+}
