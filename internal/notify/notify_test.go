@@ -225,3 +225,23 @@ func TestDeliverSendsTelegramSuccessfully(t *testing.T) {
 		t.Errorf("email result = %+v, want Skipped (not configured)", em)
 	}
 }
+
+// TestRenderShowsTheAuthorOfARefLessSetupRun pins who asked. A
+// repository_dispatch carries no commit by design, and its author is the GitHub
+// login of whoever sent it — the only record of who asked for a setup that ran
+// unattended on every server registered on the repository. Rendered only
+// alongside a sha, it is stored and never shown, and recovering it means an SSH
+// session on a server, which is the thing this trigger exists to avoid.
+func TestRenderShowsTheAuthorOfARefLessSetupRun(t *testing.T) {
+	body := Render(Summary{
+		Repository: "rdcstarr/tema",
+		Author:     "octocat",
+		Status:     "success",
+		Pipeline:   "setup",
+		Paths:      []PathSummary{{Path: "/var/www/api", User: "api", Status: "success"}},
+	})
+
+	if !strings.Contains(body, "octocat") {
+		t.Errorf("the sender of a dispatch-triggered setup is missing:\n%s", body)
+	}
+}

@@ -26,7 +26,8 @@ const emailTemplate = `<!DOCTYPE html>
 <tr><td style="padding:24px 26px 26px;font:13.5px/1.85 ui-monospace,'Cascadia Mono',Consolas,'Liberation Mono',monospace;color:#c9d1d9">
 <span style="color:#6d7278">$ {{.Verb}} {{with .SHA7}}{{.}} {{end}}→ {{.Repository}}@{{.Branch}}</span><br>
 {{if .SHA7}}<span style="color:#58a6ff">›</span> commit <span style="color:#e0a63f">{{.SHA7}}</span>{{with .Author}} by {{.}}{{end}}<br>
-{{end}}{{with .MessageLine}}<span style="color:#58a6ff">›</span> <span style="color:#8b949e">{{.}}</span><br>
+{{else}}{{with .Author}}<span style="color:#58a6ff">›</span> requested by <span style="color:#e0a63f">{{.}}</span><br>
+{{end}}{{end}}{{with .MessageLine}}<span style="color:#58a6ff">›</span> <span style="color:#8b949e">{{.}}</span><br>
 {{end}}{{with .Error}}<span style="color:#f2635a">! {{.}}</span><br>
 {{end}}<br>
 {{range $p := .Paths}}<span style="color:{{$p.Color}}">{{$p.Glyph}}</span> {{$p.Path}}{{if $p.RanAsRoot}} <span style="color:#e0a63f">⚠ root</span>{{else if $p.User}} <span style="color:#6d7278">({{$p.User}})</span>{{end}}{{with $p.StatusWord}} <span style="color:{{$p.Color}}">{{.}}</span>{{end}}<br>
@@ -44,11 +45,16 @@ var emailTmpl = template.Must(template.New("email").Parse(emailTemplate))
 // emailView is emailTemplate's data: Summary reshaped into the exact strings
 // the card prints, so the template stays free of logic beyond conditionals.
 type emailView struct {
-	Subject      string
-	Repository   string
-	Branch       string
-	Verb         string // "push" | "setup" — what triggered the run, per Summary.Pipeline
-	SHA7         string
+	Subject    string
+	Repository string
+	Branch     string
+	Verb       string // "push" | "setup" — what triggered the run, per Summary.Pipeline
+	SHA7       string
+	// Author is who the run came from: the commit's author on a push, and on a
+	// repository_dispatch the GitHub login of whoever sent it. A dispatch carries
+	// no commit, so the card renders it on its own line there — gated on the sha
+	// it would never be shown at all, and it is the only record of who asked for
+	// a setup that ran unattended across the fleet.
 	Author       string
 	MessageLine  string
 	Error        string

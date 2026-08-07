@@ -99,6 +99,13 @@ func Render(s Summary) string {
 			b.WriteString(" by " + s.Author)
 		}
 		b.WriteString("\n")
+	} else if s.Author != "" {
+		// No commit to hang the author off: a repository_dispatch carries none by
+		// design, and its author is the GitHub login of whoever sent it. That is
+		// the only record of who asked for a setup that ran unattended on every
+		// server registered on the repository, so it gets its own line rather than
+		// being dropped with the commit it does not have.
+		b.WriteString("requested by " + s.Author + "\n")
 	}
 	if s.Message != "" {
 		b.WriteString("message: " + firstLine(s.Message) + "\n")

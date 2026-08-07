@@ -166,3 +166,38 @@ func TestRenderTelegramHTMLOmitsPreWhenNoPaths(t *testing.T) {
 		t.Errorf("test notification does not use the dedicated Telegram card header:\n%s", html)
 	}
 }
+
+// TestRenderTelegramHTMLShowsTheAuthorOfARefLessSetupRun — see
+// TestRenderShowsTheAuthorOfARefLessSetupRun. A dispatch carries no commit, so
+// an author gated on the sha never reaches the card.
+func TestRenderTelegramHTMLShowsTheAuthorOfARefLessSetupRun(t *testing.T) {
+	html := RenderTelegramHTML(Summary{
+		Repository: "rdcstarr/tema",
+		Author:     "octocat",
+		Status:     "success",
+		Pipeline:   "setup",
+		Paths:      []PathSummary{{Path: "/var/www/api", User: "api", Status: "success"}},
+	})
+
+	if !strings.Contains(html, "octocat") {
+		t.Errorf("the sender of a dispatch-triggered setup is missing:\n%s", html)
+	}
+}
+
+// The author is push-controlled wherever it comes from, so the ref-less arm
+// escapes it exactly like the commit arm does.
+func TestRenderTelegramHTMLEscapesARefLessAuthor(t *testing.T) {
+	html := RenderTelegramHTML(Summary{
+		Repository: "o/r",
+		Author:     "a<i>b",
+		Status:     "success",
+		Pipeline:   "setup",
+	})
+
+	if strings.Contains(html, "a<i>b") {
+		t.Errorf("a ref-less author survived unescaped:\n%s", html)
+	}
+	if !strings.Contains(html, "a&lt;i&gt;b") {
+		t.Errorf("the escaped author is missing:\n%s", html)
+	}
+}

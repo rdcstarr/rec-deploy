@@ -213,3 +213,25 @@ func TestRenderHTMLNeutralStatuses(t *testing.T) {
 		t.Errorf("skipped card unexpectedly wears the failure border")
 	}
 }
+
+// TestRenderHTMLShowsTheAuthorOfARefLessSetupRun — see
+// TestRenderShowsTheAuthorOfARefLessSetupRun. The card gated the author line on
+// {{if .SHA7}}, and a dispatch has no commit, so the one channel an operator
+// reads at 3am never said whether a fleet-wide setup came from a colleague, a
+// stolen token or their own laptop.
+func TestRenderHTMLShowsTheAuthorOfARefLessSetupRun(t *testing.T) {
+	html, err := RenderHTML(Summary{
+		Repository: "rdcstarr/tema",
+		Author:     "octocat",
+		Status:     "success",
+		Pipeline:   "setup",
+		Paths:      []PathSummary{{Path: "/var/www/api", User: "api", Status: "success"}},
+	})
+	if err != nil {
+		t.Fatalf("RenderHTML: %v", err)
+	}
+
+	if !strings.Contains(html, "octocat") {
+		t.Errorf("the sender of a dispatch-triggered setup is missing:\n%s", html)
+	}
+}

@@ -72,6 +72,11 @@ func RenderTelegramHTML(s Summary) string {
 			b.WriteString(" by " + esc(s.Author))
 		}
 		b.WriteString("\n")
+	} else if s.Author != "" {
+		// A dispatch carries no commit, and its author is the login of whoever
+		// sent it — see Render. It takes the commit line's slot, in the same
+		// inline <code> the sha would have used, so the card keeps its shape.
+		b.WriteString("requested by <code>" + esc(s.Author) + "</code>\n")
 	}
 	if s.Message != "" {
 		b.WriteString("<i>" + esc(firstLine(s.Message)) + "</i>\n")
