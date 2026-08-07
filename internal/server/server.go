@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -163,6 +164,24 @@ func (s *Server) Drain(ctx context.Context) {
 	<-done
 }
 
+// ignoredDispatchLevel picks the level an ignored repository_dispatch is logged
+// at. A repository's own unrelated dispatches are routine — someone else's CI
+// fires them all day — and belong at Debug, where they cost nothing.
+//
+// An action that carries rec-deploy's own prefix and still does not match is a
+// different thing: a typo in a request aimed at this server. The README
+// advertises a bare `gh api … -f event_type=rec-deploy-setup`, and a mistyped
+// one is answered 204 by every server registered on the repository. At Debug,
+// with serve running at Info, that leaves no journal line anywhere and the
+// operator has a successful request, no deploy, and nothing to look at.
+func ignoredDispatchLevel(action string) slog.Level {
+	if strings.HasPrefix(action, "rec-deploy") {
+		return slog.LevelInfo
+	}
+
+	return slog.LevelDebug
+}
+
 // hook implements the receive contract: unknown token 404, bad signature 401,
 // ping 200, any other event or dispatch action 204, a repeated delivery 200
 // with no work, and a push or a rec-deploy-setup dispatch acknowledged
@@ -220,7 +239,7 @@ func hook(w http.ResponseWriter, r *http.Request, s *Server) {
 		if ev.Action != github.DispatchSetup {
 			// Someone else's dispatch. Subscribing to the event must not hand the
 			// deploy trigger to whatever else this repository uses them for.
-			slog.Debug("ignoring dispatch", "repository", repo.Repository, "action", ev.Action)
+			slog.Log(ctx, ignoredDispatchLevel(ev.Action), "ignoring dispatch", "repository", repo.Repository, "action", ev.Action)
 			w.WriteHeader(http.StatusNoContent)
 
 			return

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -493,5 +494,24 @@ func TestTamperedDispatchIs401(t *testing.T) {
 
 	if rec := h.post(t, "tok", "repository_dispatch", "d1", tampered, signed(dispatchBody)); rec.Code != http.StatusUnauthorized {
 		t.Errorf("tampered dispatch = %d, want 401", rec.Code)
+	}
+}
+
+// TestIgnoredDispatchLevel pins where a mistyped event_type surfaces. The README
+// advertises a bare `gh api … -f event_type=rec-deploy-setup`, and a typo in it
+// is answered 204 by every server registered on the repository. Logged at Debug
+// while serve runs at Info, that mistake leaves no journal line anywhere — the
+// operator sees a successful request and no deploy, on every machine at once.
+// A repository's own unrelated dispatches stay at Debug: someone else's CI must
+// not fill the journal.
+func TestIgnoredDispatchLevel(t *testing.T) {
+	if got := ignoredDispatchLevel("rec-deploy-setups"); got != slog.LevelInfo {
+		t.Errorf("level of a typo'd rec-deploy action = %v, want Info", got)
+	}
+	if got := ignoredDispatchLevel("rec-deploy_setup"); got != slog.LevelInfo {
+		t.Errorf("level of a typo'd rec-deploy action = %v, want Info", got)
+	}
+	if got := ignoredDispatchLevel("deploy-staging"); got != slog.LevelDebug {
+		t.Errorf("level of a repository's own dispatch = %v, want Debug", got)
 	}
 }
