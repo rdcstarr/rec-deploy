@@ -467,6 +467,23 @@ func TestDeployRowMarksASetupRun(t *testing.T) {
 	}
 }
 
+// TestDeployRowFlagsSetupUnambiguously pins the marker's shape. The flag column
+// is an unlabeled, space-joined list that also carries a branch name and a
+// commit subject, so a bare "setup" in it reads as prose — indistinguishable
+// from a push to a branch called setup. The file's own `⚠ root` idiom is the
+// answer: a flag is punctuated so it cannot be mistaken for content.
+func TestDeployRowFlagsSetupUnambiguously(t *testing.T) {
+	setup := deployRow(store.Deploy{Status: "success", Pipeline: store.PipelineSetup}, "o/r")
+	if !strings.Contains(setup[1], "[setup]") {
+		t.Errorf("row = %q, want the setup marker set off from the flags around it", setup[1])
+	}
+
+	branch := deployRow(store.Deploy{Status: "success", Pipeline: store.PipelinePostDeploy, Ref: "refs/heads/setup"}, "o/r")
+	if strings.Contains(branch[1], "[setup]") {
+		t.Errorf("row = %q, want a branch named setup not to read as a setup run", branch[1])
+	}
+}
+
 func TestDeployJSONCarriesThePipeline(t *testing.T) {
 	got := deployJSON(store.Deploy{Status: "success", Pipeline: store.PipelineSetup}, "o/r")
 	if got["pipeline"] != store.PipelineSetup {

@@ -534,8 +534,11 @@ func deployRow(d store.Deploy, repository string) [2]string {
 	// A setup run ran the manifest's install steps on top of the ordinary
 	// pipeline. The history has to say so: it is the difference between a
 	// routine push and an install, and nothing else in the row shows it.
+	// Bracketed like the file's `⚠ root` flag, because the rest of this list is
+	// content — a branch name, a commit subject — and an unpunctuated word in it
+	// reads as part of that.
 	if d.Pipeline == store.PipelineSetup {
-		flags = append(flags, "setup")
+		flags = append(flags, "[setup]")
 	}
 	if repository != "" {
 		flags = append(flags, repository)
