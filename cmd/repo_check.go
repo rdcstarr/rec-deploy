@@ -47,10 +47,10 @@ func newRepoCheckCmd() *cobra.Command {
 // checkRepo answers whether a push to slug would actually deploy. It reads
 // GitHub's own copy of the webhook first — that catches an address this server
 // no longer serves with no delivery and no ambiguity — and then proves the rest
-// of the chain with a live ping. repair, when set, rewrites GitHub's copy to
-// match this server before the result is reported — and the ping is re-run
-// against that new copy, so a successful repair reports as reachable rather
-// than replaying the failure it just fixed.
+// of the chain with a single live ping, taken after repair (when set) has
+// already rewritten GitHub's copy to match this server, so the ping always
+// answers for whatever copy is live by the time it runs rather than for the
+// state about to be replaced.
 func checkRepo(ctx context.Context, slug string, repair bool) error {
 	st, err := openStore(ctx)
 	if err != nil {
@@ -91,8 +91,6 @@ func checkRepo(ctx context.Context, slug string, repair bool) error {
 	// conclusion and states it as a verdict with a fix.
 	drift := hookDrift(hook, want)
 
-	verdict := verifyWebhook(ctx, client, repo)
-
 	if flagJSON {
 		repaired := repair && len(drift) > 0
 		if repaired {
@@ -102,13 +100,17 @@ func checkRepo(ctx context.Context, slug string, repair bool) error {
 
 			// UpdateHook always sends active: true and the URL and events
 			// this server wants, so the write that just happened is the
-			// truth from here — the hook read and the ping above it, both
-			// taken before the repair, are now stale on exactly what it
-			// changed.
+			// truth from here — the hook read above it is now stale on
+			// exactly what it changed.
 			hook.Active = true
 			drift = nil
-			verdict = verifyWebhook(ctx, client, repo)
 		}
+
+		// One ping, taken after the repair decision above: pinging the
+		// pre-repair hook first would mean waiting out the full 20s budget
+		// for a config about to be replaced, on precisely the drift
+		// --repair exists to fix.
+		verdict := verifyWebhook(ctx, client, repo)
 
 		if err := ui.PrintJSON(map[string]any{
 			"repository": repo.Repository,
@@ -149,13 +151,17 @@ func checkRepo(ctx context.Context, slug string, repair bool) error {
 			return err
 		}
 
-		// Same as the --json branch above: the repair just wrote active:
-		// true and this server's own URL and events, so both the hook and
-		// the reachability verdict read from before it are stale.
-		hook.Active = true
+		// drift is what webhookExit reads below; hook.Active is not read
+		// again in this branch, unlike the --json payload, so there is
+		// nothing else here for the repair to refresh.
 		drift = nil
-		verdict = verifyWebhook(ctx, client, repo)
 	}
+
+	// One ping, taken after the repair decision above: pinging the
+	// pre-repair hook first would mean waiting out the full 20s budget for a
+	// config about to be replaced, on precisely the drift --repair exists to
+	// fix.
+	verdict := verifyWebhook(ctx, client, repo)
 
 	ui.Out("")
 	renderReachability(ctx, slug, publicURL, verdict)
