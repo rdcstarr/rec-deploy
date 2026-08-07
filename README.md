@@ -317,7 +317,11 @@ rollback_on_failure: true
 `setup` runs before `post_deploy`, never instead of it. A setup run is `setup` then
 `post_deploy`, so the install commands every deploy shares stay in one place and cannot
 drift apart. A setup that was asked for on a manifest with no `setup` block is an error,
-not a silent ordinary deploy.
+not a silent ordinary deploy — and the error comes *before* the sync, checked against the
+code already on the checkout, so the tree is never fast-forwarded and cleaned for a run
+that then executes nothing. If the pulled commit is the one that lost the block, the tree
+has already moved: `post_deploy` runs so it is not left unbuilt, and the path still fails,
+naming both.
 
 A `setup` step can run again at any time, at the request of anyone with write access to
 the repository. Write steps that survive a second run. `php artisan key:generate` does
