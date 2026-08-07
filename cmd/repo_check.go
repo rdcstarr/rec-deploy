@@ -48,7 +48,9 @@ func newRepoCheckCmd() *cobra.Command {
 // GitHub's own copy of the webhook first — that catches an address this server
 // no longer serves with no delivery and no ambiguity — and then proves the rest
 // of the chain with a live ping. repair, when set, rewrites GitHub's copy to
-// match this server before the result is reported.
+// match this server before the result is reported — and the ping is re-run
+// against that new copy, so a successful repair reports as reachable rather
+// than replaying the failure it just fixed.
 func checkRepo(ctx context.Context, slug string, repair bool) error {
 	st, err := openStore(ctx)
 	if err != nil {
@@ -97,7 +99,15 @@ func checkRepo(ctx context.Context, slug string, repair bool) error {
 			if err := repairHook(ctx, client, repo, want, drift); err != nil {
 				return err
 			}
+
+			// UpdateHook always sends active: true and the URL and events
+			// this server wants, so the write that just happened is the
+			// truth from here — the hook read and the ping above it, both
+			// taken before the repair, are now stale on exactly what it
+			// changed.
+			hook.Active = true
 			drift = nil
+			verdict = verifyWebhook(ctx, client, repo)
 		}
 
 		if err := ui.PrintJSON(map[string]any{
@@ -138,7 +148,13 @@ func checkRepo(ctx context.Context, slug string, repair bool) error {
 		if err := repairHook(ctx, client, repo, want, drift); err != nil {
 			return err
 		}
+
+		// Same as the --json branch above: the repair just wrote active:
+		// true and this server's own URL and events, so both the hook and
+		// the reachability verdict read from before it are stale.
+		hook.Active = true
 		drift = nil
+		verdict = verifyWebhook(ctx, client, repo)
 	}
 
 	ui.Out("")
