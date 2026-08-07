@@ -1,9 +1,14 @@
 package cmd
 
 import (
+	"context"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/rdcstarr/rec-deploy/internal/config"
+	"github.com/rdcstarr/rec-deploy/internal/discover"
 	"github.com/rdcstarr/rec-deploy/internal/github"
 )
 
@@ -59,6 +64,61 @@ func TestDispatchReachRecognisesARecDeployWebhookUnderAPath(t *testing.T) {
 func TestDispatchReachOnNoHooks(t *testing.T) {
 	if ready, stale := dispatchReach(nil); ready != 0 || stale != 0 {
 		t.Errorf("reach = %d/%d, want 0/0", ready, stale)
+	}
+}
+
+// TestSetupBranchOptionsOffersEveryBranchAndThisServersOwn covers the choice
+// that mitigates the sharpest edge in this feature: a dispatch reaches every
+// server registered on the repository, and install steps are frequently not
+// idempotent, so an operator who cannot narrow it has only the destructive
+// option. This server's own checkouts are not the fleet's answer — no server
+// knows what the others hold — but they are the honest set to offer.
+func TestSetupBranchOptionsOffersEveryBranchAndThisServersOwn(t *testing.T) {
+	options := setupBranchOptions([]discover.Installation{
+		{Path: "/var/www/prod", Branch: "main"},
+		{Path: "/var/www/staging", Branch: "develop"},
+		{Path: "/var/www/second", Branch: "main"},
+		{Path: "/var/www/detached", Branch: ""},
+	})
+
+	var values []string
+	for _, o := range options {
+		values = append(values, o.Value)
+	}
+
+	want := []string{branchEvery, "develop", "main", branchOther}
+	if !slices.Equal(values, want) {
+		t.Errorf("options = %v, want %v — every branch, each distinct local branch once, then a hand-typed one", values, want)
+	}
+}
+
+// TestSetupBranchOptionsStayUsableWithNoLocalCheckouts is the laptop case, and
+// the reason the hand-typed entry exists: `repo setup` reads no local state by
+// design, so discovery routinely finds nothing here. Narrowing must still be
+// reachable — offering only "every branch" would make the widest blast radius
+// the sole option again.
+func TestSetupBranchOptionsStayUsableWithNoLocalCheckouts(t *testing.T) {
+	options := setupBranchOptions(nil)
+
+	if len(options) != 2 || options[0].Value != branchEvery || options[1].Value != branchOther {
+		t.Fatalf("options = %+v, want every branch and a hand-typed one", options)
+	}
+}
+
+// TestLocalCheckoutsDegradesWhenDiscoveryAnswersNothing pins the other half of
+// that: discovery is an offer here, never a requirement. A scan that finds
+// nothing — or fails outright on a machine with no discovery roots — narrows
+// what can be offered instead of ending a command documented to need no local
+// state at all.
+func TestLocalCheckoutsDegradesWhenDiscoveryAnswersNothing(t *testing.T) {
+	saved := cfg
+	defer func() { cfg = saved }()
+
+	cfg = &config.Config{}
+	cfg.Discovery.Roots = []string{filepath.Join(t.TempDir(), "nothing-here")}
+
+	if got := localCheckouts(context.Background(), "o/r"); len(got) != 0 {
+		t.Errorf("localCheckouts = %+v, want none", got)
 	}
 }
 

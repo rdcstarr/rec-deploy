@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/rdcstarr/rec-deploy/internal/discover"
 	"github.com/rdcstarr/rec-deploy/internal/github"
 	"github.com/rdcstarr/rec-deploy/internal/ui"
 )
@@ -24,7 +26,7 @@ func newRepoSetupCmd() *cobra.Command {
 		Long: "setup sends GitHub a repository_dispatch, which GitHub delivers to every server registered on the repository — " +
 			"so the setup block runs without an SSH session anywhere. It reads no local state and needs no registered repository: " +
 			"a GitHub token with write access is the whole requirement, which is what lets it run from a laptop. " +
-			"In a terminal, with no --branch given, it first asks whether to run here instead — the two differ by blast radius, so nothing is guessed on the operator's behalf.",
+			"In a terminal, with no --branch given, it first asks whether to run here instead, then which branch the request should reach — the triggers differ by blast radius and a setup step is rarely safe to repeat, so nothing is guessed on the operator's behalf.",
 		Args: cobra.MaximumNArgs(1),
 		Example: "rec-deploy repo setup rdcstarr/tema-mea\n" +
 			"rec-deploy repo setup rdcstarr/tema-mea --branch develop",
@@ -59,13 +61,112 @@ func newRepoSetupCmd() *cobra.Command {
 				return runDeploy(cmd.Context(), slug, "", true)
 			}
 
-			return requestSetup(cmd.Context(), slug, branch)
+			// The fleet arm, and only it, then asks the branch: the dispatch
+			// reaches every server registered on the repository, and a setup
+			// step is frequently not idempotent, so "every checkout everywhere"
+			// must be a choice the operator makes rather than the only one on
+			// offer.
+			chosen, err := chooseSetupBranch(cmd.Context(), slug)
+			if err != nil {
+				return err
+			}
+
+			return requestSetup(cmd.Context(), slug, chosen)
 		},
 	}
 
 	cmd.Flags().StringVar(&branch, "branch", "", "only the checkouts on this branch")
 
 	return cmd
+}
+
+// branchEvery and branchOther are the two answers of the branch chooser that
+// are not branch names. Both carry a space, which git forbids in a ref, so
+// neither can collide with a branch an operator really has.
+const (
+	branchEvery = "every branch"
+	branchOther = "another branch"
+)
+
+// chooseSetupBranch asks which branch a fleet-wide setup should reach, and
+// returns it — "" for every branch, which is what Dispatch sends when no branch
+// is named.
+//
+// It is the mitigation for the sharpest edge in this design: one dispatch
+// reaches every server registered on the repository, and install steps are
+// frequently not idempotent — `php artisan key:generate` invalidates every
+// session and everything encrypted with the old key. An operator who is offered
+// no way to narrow is offered only the destructive option.
+func chooseSetupBranch(ctx context.Context, slug string) (string, error) {
+	// selectMenu, like the scope question above it: both are navigation screens
+	// of the same flow, so h shows the command's help on either.
+	choice, err := selectMenu("Which branch should run setup?", setupBranchOptions(localCheckouts(ctx, slug)))
+	if err != nil {
+		return "", err // ui.ErrBack (re-show the hub) or ui.ErrQuit (quit)
+	}
+
+	switch choice {
+	case "":
+		// Backed out (Esc / ←) — climb, dispatch nothing.
+		return "", ui.ErrBack
+	case branchEvery:
+		return "", nil
+	case branchOther:
+		branch, ok, err := interactiveArg(nil, "Branch name")
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", ui.ErrBack
+		}
+
+		return branch, nil
+	}
+
+	return choice, nil
+}
+
+// setupBranchOptions builds the branch chooser: every branch, then each
+// distinct branch this server's own checkouts of the repository sit on, then
+// one typed by hand.
+//
+// The local branches are not the fleet's answer — no server knows what the
+// others hold — but they are the honest set to offer, and they beat typing a
+// branch name blind into a command that reaches every machine. The hand-typed
+// entry is what keeps this usable where discovery answers nothing, which is
+// every laptop: `repo setup` reads no local state by design, and a chooser that
+// could only offer "every branch" there would put the operator back on the one
+// option this exists to stop being mandatory.
+func setupBranchOptions(found []discover.Installation) []ui.Option {
+	var branches []string
+	for _, in := range found {
+		if in.Branch != "" && !slices.Contains(branches, in.Branch) {
+			branches = append(branches, in.Branch)
+		}
+	}
+	slices.Sort(branches)
+
+	options := make([]ui.Option, 0, len(branches)+2)
+	options = append(options, ui.Option{Label: "every branch — every checkout, on every server", Value: branchEvery})
+	for _, b := range branches {
+		options = append(options, ui.Option{Label: b + " — the checkouts on this branch", Value: b})
+	}
+
+	return append(options, ui.Option{Label: "another branch…", Value: branchOther})
+}
+
+// localCheckouts returns this server's own checkouts of slug, and none when
+// discovery cannot answer. Discovery is an offer here, never a requirement:
+// `repo setup` reads no local state and needs no registered repository — that
+// is what lets it run from a laptop — so a scan that finds nothing, or fails
+// outright, narrows what can be offered instead of ending the command.
+func localCheckouts(ctx context.Context, slug string) []discover.Installation {
+	found, err := scanInstallations(ctx)
+	if err != nil {
+		return nil
+	}
+
+	return discover.Filter(found, slug)
 }
 
 // requestSetup sends the dispatch, after proving it has somewhere to land.
