@@ -239,9 +239,11 @@ rec-deploy repo install rdcstarr/tema-mea /home/andrei/web/site.ro/public_html/w
 ```
 
 which clones as the directory's owner. If the checkout contains a manifest, install
-immediately runs its `post_deploy` pipeline with the same ownership, timeout, locking,
-logging and rollback rules as a normal deploy. Discovery then finds the checkout on every
-push.
+immediately runs its pipeline with the same ownership, timeout, locking, logging and
+rollback rules as a normal deploy — `setup` then `post_deploy` when the manifest has a
+`setup` block, `post_deploy` alone otherwise. A first install is, by definition, the first
+install: it is the one place a setup run happens without being asked for. Discovery then
+finds the checkout on every push.
 
 ## Uninstall
 
@@ -289,6 +291,10 @@ only one of them in a checkout.
 ```yaml
 repository: rdcstarr/tema-mea
 
+setup:
+  - php artisan key:generate
+  - php artisan storage:link
+
 post_deploy:
   - composer install --no-dev --optimize-autoloader
   - run: npm ci && npm run build
@@ -302,8 +308,19 @@ rollback_on_failure: true
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `repository` | required | The `owner/repo` this checkout must belong to. Verified against `git remote get-url origin` before anything runs; a mismatch aborts that path. |
+| `setup` | `[]` | Steps run **before** `post_deploy`, only when a deploy is a setup run. Hold what is true exactly once — `key:generate`, `storage:link`, a seed. Anything every deploy needs belongs in `post_deploy`, where it is written once. |
 | `post_deploy` | `[]` | Steps run in order after a successful git sync. |
 | `rollback_on_failure` | `false` | On a failed step, reset the tree to the pre-deploy SHA and re-run the *previous* manifest's `post_deploy`. |
+
+`setup` runs before `post_deploy`, never instead of it. A setup run is `setup` then
+`post_deploy`, so the install commands every deploy shares stay in one place and cannot
+drift apart. A setup that was asked for on a manifest with no `setup` block is an error,
+not a silent ordinary deploy.
+
+A `setup` step can run again at any time, at the request of anyone with write access to
+the repository. Write steps that survive a second run. `php artisan key:generate` does
+not — on a live site it invalidates every session and everything encrypted with the old
+key.
 
 A **step** is either form:
 
@@ -350,6 +367,39 @@ shell-quoting layer and the need for passwordless sudo to arbitrary users. The o
 read from the directory's inode (`stat`), never parsed out of the path, so no layout is
 assumed. Supplementary groups, `HOME` and `SHELL` come from the real passwd entry.
 
+## Running setup
+
+The `setup` block holds the commands that are correct exactly once, on a checkout that has
+just appeared — an install, not a routine deploy.
+
+A setup run happens in exactly three ways:
+
+- `rec-deploy repo install <owner/repo> <path>` — automatic, on a first install.
+- `rec-deploy repo deploy <owner/repo> --setup` — this server only.
+- `rec-deploy repo setup <owner/repo>` — every server registered on the repository.
+
+That last one is fleet-wide by design: a single command reaches every machine that
+registered a webhook on the repository, with no per-server loop and no inventory to keep.
+`--branch` narrows it to the checkouts sitting on one branch, which matters because a
+`setup` step can run again at any time, at the request of anyone with write access to the
+repository — write steps that survive a second run. `php artisan key:generate` does not:
+on a live site it invalidates every session and everything encrypted with the old key. A
+dispatch meant for staging that also lands on production, with no way to say otherwise, is
+the sharpest edge this feature has.
+
+`rec-deploy repo setup` needs the binary and a GitHub token, nothing else — it reads no
+local state. The same request also works as a bare `gh api` call, from any machine with
+`gh` authenticated against the repository:
+
+```sh
+gh api repos/rdcstarr/tema-mea/dispatches -f event_type=rec-deploy-setup
+```
+
+The request travels the existing webhook: same URL, same HMAC secret, same delivery
+deduplication as a push. A webhook registered before this feature subscribes to `push`
+alone and will not receive it — `rec-deploy repo check <owner/repo> --repair` fixes that,
+once, on each server whose webhook still predates this feature.
+
 ## Many servers
 
 Each server registers **its own** webhook on the repository. GitHub allows several
@@ -363,6 +413,8 @@ GitHub push
 
 No control plane, no agent inventory, no SSH between servers, no single point of failure.
 A server that is down misses its push and catches up with `rec-deploy repo deploy owner/repo`.
+A single `rec-deploy repo setup` reaches every server registered on the repository, and
+each server owns its own webhook, so each repairs its own with `repo check --repair`.
 
 ## Security posture
 
@@ -380,7 +432,10 @@ services in `/opt` belong to no site user — but they are **flagged loudly** (`
 `rec-deploy status` and in every notification), because push access to such a repository is
 root on the server and that should be visible rather than discovered. If leaking commit
 metadata to a network observer is unacceptable, run with `--listen 127.0.0.1:9000` behind
-an nginx with TLS; no extra code is needed.
+an nginx with TLS; no extra code is needed. Sending a `repository_dispatch` needs write
+access to the repository — the same access that already lets someone push a commit whose
+`post_deploy` runs arbitrary commands on the server, so the trigger grants no capability
+that did not exist.
 
 ## Commands
 
@@ -393,10 +448,13 @@ rec-deploy repo add <owner/repo> [--skip-check]   # keygen + upload deploy key +
 rec-deploy repo list                              # registered repositories
 rec-deploy repo show <owner/repo>                 # key id, hook id, checkouts, last deploy
 rec-deploy repo check <owner/repo>                # can GitHub actually deliver a webhook here?
+rec-deploy repo check <owner/repo> --repair       # rewrite github's copy of this server's webhook
 rec-deploy repo remove <owner/repo>               # deletes the key and the hook on GitHub too
 rec-deploy repo rotate <owner/repo>               # roll the HMAC secret and the deploy key
 rec-deploy repo install <owner/repo> <path>       # clone into path as its owner
 rec-deploy repo deploy <owner/repo> [--path P]    # deploy now; command output in rec-deploy logs
+rec-deploy repo deploy <owner/repo> --setup       # run setup then post_deploy, on this server
+rec-deploy repo setup <owner/repo> [--branch B]   # ask every server on this repo to run setup
 rec-deploy repo rollback <owner/repo> [--path P]  # back to the previous SHA
 rec-deploy repo scan                              # what discovery finds, and why
 rec-deploy repo config get <key> | set <key> <value> | path

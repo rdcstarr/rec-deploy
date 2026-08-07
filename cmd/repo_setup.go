@@ -20,7 +20,8 @@ func newRepoSetupCmd() *cobra.Command {
 		Short: "Ask every server registered on a repository to run its setup pipeline",
 		Long: "setup sends GitHub a repository_dispatch, which GitHub delivers to every server registered on the repository — " +
 			"so the setup block runs without an SSH session anywhere. It reads no local state and needs no registered repository: " +
-			"a GitHub token with write access is the whole requirement, which is what lets it run from a laptop.",
+			"a GitHub token with write access is the whole requirement, which is what lets it run from a laptop. " +
+			"In a terminal, with no --branch given, it first asks whether to run here instead — the two differ by blast radius, so nothing is guessed on the operator's behalf.",
 		Args: cobra.MaximumNArgs(1),
 		Example: "rec-deploy repo setup rdcstarr/tema-mea\n" +
 			"rec-deploy repo setup rdcstarr/tema-mea --branch develop",

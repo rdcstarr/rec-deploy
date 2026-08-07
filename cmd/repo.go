@@ -671,9 +671,10 @@ func rotateRepo(ctx context.Context, slug string) error {
 // newRepoInstallCmd builds `repo install owner/repo PATH`.
 func newRepoInstallCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "install <owner/repo> <path>",
-		Short:   "Clone a repository into a path, as that path's owner",
-		Long:    "install clones the repository over SSH with its deploy key, running git as the owner of the parent directory so every file lands correctly owned.",
+		Use:   "install <owner/repo> <path>",
+		Short: "Clone a repository into a path, as that path's owner",
+		Long: "install clones the repository over SSH with its deploy key, running git as the owner of the parent directory so every file lands correctly owned. " +
+			"When the checkout's manifest has a setup block, this is the one place it runs unasked: setup, then post_deploy — a first install being, by definition, the first install.",
 		Args:    cobra.MaximumNArgs(2),
 		Example: "rec-deploy repo install rdcstarr/tema-mea /home/andrei/web/site/public_html/wp-content/themes/tema",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -707,6 +708,11 @@ func newRepoInstallCmd() *cobra.Command {
 // when it already exists and is empty, or of its parent otherwise. This supports
 // control panels that provision an empty document root ahead of time while
 // keeping the checkout owned by the site user from the first file.
+//
+// A checkout whose manifest carries a setup block runs setup and then
+// post_deploy here — the one place that happens without being asked for, since
+// a repository being installed for the first time is a first install by
+// definition.
 func installRepo(ctx context.Context, slug, path string) error {
 	st, err := openStore(ctx)
 	if err != nil {
