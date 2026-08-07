@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 )
 
@@ -283,5 +284,29 @@ func TestDeleteDeployKeyOn404IsErrNotFound(t *testing.T) {
 	err := c.DeleteDeployKey(context.Background(), "rdcstarr/tema", 4242)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("DeleteDeployKey on a 404 = %v, want errors.Is(err, ErrNotFound)", err)
+	}
+}
+
+// TestHooksAsksForAFullPage pins the page size. GitHub's default is 30, and
+// Hooks sent no per_page at all, so a repository with more webhooks reported a
+// server count that was wrong — and, worse, if the first 30 were foreign or
+// push-only the caller counted zero reachable servers and refused a dispatch
+// that would have worked.
+func TestHooksAsksForAFullPage(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		_ = json.NewEncoder(w).Encode([]map[string]any{})
+	}))
+	defer srv.Close()
+
+	c := New("tok")
+	c.BaseURL = srv.URL
+
+	if _, err := c.Hooks(context.Background(), "rdcstarr/tema"); err != nil {
+		t.Fatalf("Hooks: %v", err)
+	}
+	if want := "per_page=" + strconv.Itoa(HooksPerPage); query != want {
+		t.Errorf("query = %q, want %q — GitHub pages webhooks at 30 by default", query, want)
 	}
 }

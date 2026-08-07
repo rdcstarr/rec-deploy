@@ -176,3 +176,19 @@ func TestDescribeLocalSetupStaysHonestWithNoCheckouts(t *testing.T) {
 		t.Errorf("describeLocalSetup(nil) = %q, want it to still say what the run covers", got)
 	}
 }
+
+// TestServerCountSaysWhenTheListingWasCutShort is the other half of the page
+// fix. Hooks reads one page of github.HooksPerPage, so a full page back means
+// GitHub had more to give and the count is a floor. Printed bare it would state
+// a number that is simply wrong, on the one line an operator uses to decide
+// whether a fleet-wide dispatch is going where they think.
+func TestServerCountSaysWhenTheListingWasCutShort(t *testing.T) {
+	if got := serverCount(3, false); got != plural(3, "server") {
+		t.Errorf("serverCount(3, false) = %q, want the plain count", got)
+	}
+
+	got := serverCount(github.HooksPerPage, true)
+	if !strings.Contains(got, "at least") {
+		t.Errorf("serverCount(full page) = %q, want it to read as a floor", got)
+	}
+}

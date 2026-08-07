@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 )
 
 // CreateHook registers this server's webhook — push and repository_dispatch
@@ -62,8 +63,19 @@ func (c *Client) Dispatch(ctx context.Context, repo, eventType, branch string) e
 	return nil
 }
 
+// HooksPerPage is the page size Hooks asks GitHub for — its maximum. GitHub's
+// own default is 30, which silently cut the listing short on any repository with
+// more webhooks than that. A caller that gets exactly this many back has a
+// truncated list and must say so where it reports a count, rather than implying
+// the number is the whole truth.
+const HooksPerPage = 100
+
 // Hooks lists every webhook on the repository — every server registered on it,
 // not only this one. It answers whether a dispatch has anywhere to land.
+//
+// It reads one page of HooksPerPage. A repository with more webhooks than that
+// is far past the fan-out this tool is built for, and following Link headers to
+// prove it would buy nothing a "the list was cut short" note does not.
 func (c *Client) Hooks(ctx context.Context, repo string) ([]Hook, error) {
 	var out []struct {
 		ID     int64    `json:"id"`
@@ -74,7 +86,8 @@ func (c *Client) Hooks(ctx context.Context, repo string) ([]Hook, error) {
 		} `json:"config"`
 	}
 
-	if _, err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/hooks", nil, &out); err != nil {
+	path := "/repos/" + repo + "/hooks?per_page=" + strconv.Itoa(HooksPerPage)
+	if _, err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
 		return nil, fmt.Errorf("github: list webhooks of %s: %w", repo, err)
 	}
 

@@ -268,6 +268,10 @@ func requestSetup(ctx context.Context, slug, branch string) error {
 		return fmt.Errorf("no rec-deploy webhook on %s delivers `repository_dispatch`, so a setup request would reach no server — run `rec-deploy repo check %s --repair` on each server that deploys it", slug, slug)
 	}
 
+	// Hooks reads one page, so a full page back means GitHub had more to give
+	// and every count derived from it is a floor.
+	truncated := len(hooks) == github.HooksPerPage
+
 	target := "every checkout"
 	if branch != "" {
 		target = "the checkouts on " + branch
@@ -275,11 +279,11 @@ func requestSetup(ctx context.Context, slug, branch string) error {
 
 	if !flagYes {
 		if !isInteractive() {
-			return fmt.Errorf("setup runs the install steps on %s of %s, on %s — re-run with `--yes`", target, slug, plural(ready, "server"))
+			return fmt.Errorf("setup runs the install steps on %s of %s, on %s — re-run with `--yes`", target, slug, serverCount(ready, truncated))
 		}
 
 		ok, err := ui.Confirm(
-			"Run setup for "+slug+" on "+plural(ready, "server")+"?",
+			"Run setup for "+slug+" on "+serverCount(ready, truncated)+"?",
 			"github delivers this to every server registered on the repository; it runs "+target+" there",
 		)
 		if err != nil {
@@ -304,16 +308,31 @@ func requestSetup(ctx context.Context, slug, branch string) error {
 			"event_type":  github.DispatchSetup,
 			"servers":     ready,
 			"unreachable": stale,
+			// GitHub had more webhooks than one page: servers and unreachable are
+			// floors, not totals.
+			"truncated": truncated,
 		})
 	}
 
-	ui.Success("setup requested for " + slug + " — github delivers it to " + plural(ready, "server"))
+	ui.Success("setup requested for " + slug + " — github delivers it to " + serverCount(ready, truncated))
 	if stale > 0 {
 		ui.Warn(plural(stale, "rec-deploy webhook") + " on this repository can't deliver `repository_dispatch` and won't receive this request — the server behind each one fixes its own with `rec-deploy repo check " + slug + " --repair`")
 	}
 	ui.Info("each server reports the result through its own notifications; `rec-deploy logs " + slug + "` shows it there")
 
 	return nil
+}
+
+// serverCount renders how many servers a dispatch reaches. github.Hooks reads
+// one page, so a listing that came back full was cut short and every count
+// derived from it is a floor — printed bare, the number would simply be wrong on
+// the one line an operator reads before sending a request to a whole fleet.
+func serverCount(ready int, truncated bool) string {
+	if truncated {
+		return "at least " + plural(ready, "server")
+	}
+
+	return plural(ready, "server")
 }
 
 // dispatchReach counts rec-deploy's own webhooks on the repository: those that
