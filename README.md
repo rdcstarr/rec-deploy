@@ -239,11 +239,13 @@ rec-deploy repo install rdcstarr/tema-mea /home/andrei/web/site.ro/public_html/w
 ```
 
 which clones as the directory's owner. If the checkout contains a manifest, install
-immediately runs its pipeline with the same ownership, timeout, locking, logging and
-rollback rules as a normal deploy — `setup` then `post_deploy` when the manifest has a
-`setup` block, `post_deploy` alone otherwise. A first install is, by definition, the first
-install: it is the one place a setup run happens without being asked for. Discovery then
-finds the checkout on every push.
+immediately runs its pipeline with the same ownership, timeout, locking and logging as a
+normal deploy — `setup` then `post_deploy` when the manifest has a `setup` block,
+`post_deploy` alone otherwise — though a setup run never rolls back, whatever
+`rollback_on_failure` says: a failed step leaves the tree exactly where it stopped, for you
+to look at. A first install is, by definition, the first install: it is the one place a
+setup run happens without being asked for. Discovery then finds the checkout on every
+push.
 
 ## Uninstall
 
@@ -371,6 +373,11 @@ assumed. Supplementary groups, `HOME` and `SHELL` come from the real passwd entr
 
 The `setup` block holds the commands that are correct exactly once, on a checkout that has
 just appeared — an install, not a routine deploy.
+
+A setup run never rolls back, whatever `rollback_on_failure` says: a failed step stops the
+run and leaves the tree exactly where it stopped, for you to look at. There is usually no
+code change to undo, so resetting the tree and re-running the previous `post_deploy` would
+not undo anything either.
 
 A setup run happens in exactly three ways:
 
