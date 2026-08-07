@@ -275,14 +275,21 @@ func requestSetup(ctx context.Context, slug, branch string) error {
 		return err
 	}
 
+	// Hooks reads one page, so a full page back means GitHub had more to give
+	// and every count derived from it is a floor — including the refusal below,
+	// which is the one place a count becomes a flat claim about the whole fleet.
+	truncated := len(hooks) == github.HooksPerPage
+
 	ready, stale := dispatchReach(hooks)
 	if ready == 0 {
+		if truncated {
+			// The refusal is the one place a count becomes a flat claim about the
+			// whole fleet, and this listing is a floor rather than the whole truth.
+			return fmt.Errorf("none of the first %d webhooks on %s is a rec-deploy hook that delivers `repository_dispatch`, and github had more to list — run `rec-deploy repo check %s --repair` on each server that deploys it", github.HooksPerPage, slug, slug)
+		}
+
 		return fmt.Errorf("no rec-deploy webhook on %s delivers `repository_dispatch`, so a setup request would reach no server — run `rec-deploy repo check %s --repair` on each server that deploys it", slug, slug)
 	}
-
-	// Hooks reads one page, so a full page back means GitHub had more to give
-	// and every count derived from it is a floor.
-	truncated := len(hooks) == github.HooksPerPage
 
 	target := "every checkout"
 	if branch != "" {

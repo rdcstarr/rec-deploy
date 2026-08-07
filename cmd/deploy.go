@@ -139,7 +139,7 @@ func runDeploy(ctx context.Context, slug, path string, setup bool) error {
 	res, runErr := deploy.Run(ctx, opts)
 	record(ctx, st, cfg, deployID, res, runErr)
 
-	return report(res, runErr)
+	return report(res, runErr, true)
 }
 
 // runRollback resets every checkout of slug to the commit the last deploy moved
@@ -208,7 +208,9 @@ func runRollback(ctx context.Context, slug, path string) error {
 	res, runErr := deploy.Rollback(ctx, opts)
 	record(ctx, st, cfg, deployID, res, runErr)
 
-	return report(res, runErr)
+	// false: a rollback moved these trees backwards, so pointing at another
+	// rollback would push them forward onto the commit just escaped.
+	return report(res, runErr, false)
 }
 
 // deployOptions builds the engine options a manual run shares with the daemon's:
@@ -283,8 +285,10 @@ func record(ctx context.Context, st *store.Store, cfg *config.Config, deployID i
 }
 
 // report renders a finished run and returns its error unchanged, so a failed
-// deploy prints every path it touched and still exits non-zero.
-func report(res deploy.Result, runErr error) error {
+// deploy prints every path it touched and still exits non-zero. wasDeploy tells
+// it which command it is reporting for: only a deploy can be undone by a
+// rollback, so only a deploy may offer one.
+func report(res deploy.Result, runErr error, wasDeploy bool) error {
 	if flagJSON {
 		if err := ui.PrintJSON(res); err != nil {
 			return err
@@ -293,7 +297,7 @@ func report(res deploy.Result, runErr error) error {
 		return runErr
 	}
 
-	renderResult(res)
+	renderResult(res, wasDeploy)
 
 	return runErr
 }
@@ -301,7 +305,7 @@ func report(res deploy.Result, runErr error) error {
 // renderResult prints one line per checkout: the commit it landed on, who it ran
 // as, and why it skipped or failed. A root-owned target is flagged here as it is
 // everywhere else — push access to that repository is root on this server.
-func renderResult(res deploy.Result) {
+func renderResult(res deploy.Result, wasDeploy bool) {
 	failed := false
 
 	for _, pr := range res.Paths {
@@ -328,21 +332,32 @@ func renderResult(res deploy.Result) {
 	if failed {
 		ui.Info("`rec-deploy logs` shows the full output of the command that failed")
 	}
-	if failedAfterMoving(res) {
+	if rollbackRecovers(res, wasDeploy) {
 		ui.Info("those checkouts are left on the new commit — `rec-deploy repo rollback " + res.Repository + "` puts them back")
 	}
 }
 
-// failedAfterMoving reports whether any path failed after the sync had already
-// moved its tree. Such a checkout is left on the new commit — a setup run is
-// never rolled back, and rollback_on_failure is off by default — so the site is
-// serving code whose pipeline did not finish, and the run's own row carries the
-// commit it came from. `repo rollback` recovers it; without this the report says
-// only where to read the failure, never how to undo it.
+// rollbackRecovers reports whether `repo rollback` would undo what this run
+// left behind: a path that failed after the sync had already moved its tree.
+// Such a checkout is left on the new commit — a setup run is never rolled back,
+// and rollback_on_failure is off by default — so the site is serving code whose
+// pipeline did not finish, and the run's own row carries the commit it came
+// from. Without this the report says only where to read the failure, never how
+// to undo it.
 //
-// A path that failed before the sync is deliberately excluded: nothing moved
+// wasDeploy is why this is not a property of the result alone. A rollback run
+// moves trees too, backwards, and records `previous_sha` as the commit it just
+// escaped — so pointing at `repo rollback` after one has failed would send the
+// operator to reset those checkouts forward, onto exactly the commit they were
+// undoing. The hint belongs to a deploy and to nothing else.
+//
+// A path that failed before the sync is excluded either way: nothing moved
 // there, and a rollback would reset a tree this run never touched.
-func failedAfterMoving(res deploy.Result) bool {
+func rollbackRecovers(res deploy.Result, wasDeploy bool) bool {
+	if !wasDeploy {
+		return false
+	}
+
 	for _, pr := range res.Paths {
 		if pr.Status == store.StatusSuccess || pr.Status == store.StatusSkipped {
 			continue

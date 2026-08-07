@@ -305,7 +305,7 @@ func deployPath(ctx context.Context, in discover.Installation, opts Options) Pat
 	if opts.Setup {
 		if m, mErr := manifest.Load(in.Path); mErr == nil && len(m.Setup) == 0 {
 			pr.Status = store.StatusFailed
-			pr.Reason = "the checked-out code declares no `setup` block, so nothing was pulled and nothing ran — add one, or deploy without `--setup`"
+			pr.Reason = "the checked-out code declares no `setup` block, so nothing was pulled and nothing ran — this checkout may be behind, or the block may live on another branch; commit it to this one, or deploy without `--setup`"
 
 			return pr
 		}
@@ -351,7 +351,7 @@ func deployPath(ctx context.Context, in discover.Installation, opts Options) Pat
 	// is not in the code that arrived.
 	if opts.Setup && len(m.Setup) == 0 {
 		pr.Status = store.StatusFailed
-		pr.Reason = "the pulled code declares no `setup` block, so the setup that was asked for did not run; post_deploy ran instead, so the tree is not left unbuilt"
+		pr.Reason = "the pulled code declares no `setup` block, so the setup that was asked for did not run; post_deploy ran instead, so the tree is not left unbuilt — commit a `setup` block to this checkout's branch and re-run"
 		if stepErr != nil {
 			pr.Reason += "; post_deploy failed: " + stepErr.Error()
 		}

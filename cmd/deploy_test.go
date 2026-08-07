@@ -277,16 +277,16 @@ func TestDeployCmdHasASetupFlag(t *testing.T) {
 	}
 }
 
-// TestFailedAfterMovingNamesTheRunsThatNeedRecovery is the hint the report owes.
+// TestRollbackRecoversNamesTheRunsThatNeedRecovery is the hint the report owes.
 // A path that failed after its tree had already moved is left on the new commit
 // — deliberately un-rolled-back on a setup run — and `rec-deploy logs` alone
 // tells the operator what broke, not how to get the site back. Its row carries a
 // usable rollback target, so `repo rollback` recovers it; nothing said so.
-func TestFailedAfterMovingNamesTheRunsThatNeedRecovery(t *testing.T) {
+func TestRollbackRecoversNamesTheRunsThatNeedRecovery(t *testing.T) {
 	moved := deploy.Result{Paths: []deploy.PathResult{
 		{Path: "/srv/a", Status: store.StatusFailed, PreviousSHA: "aaaaaaa", NewSHA: "bbbbbbb"},
 	}}
-	if !failedAfterMoving(moved) {
+	if !rollbackRecovers(moved, true) {
 		t.Error("a failure that left the tree on a new commit offers no recovery hint")
 	}
 
@@ -296,7 +296,7 @@ func TestFailedAfterMovingNamesTheRunsThatNeedRecovery(t *testing.T) {
 	untouched := deploy.Result{Paths: []deploy.PathResult{
 		{Path: "/srv/a", Status: store.StatusFailed, PreviousSHA: "aaaaaaa"},
 	}}
-	if failedAfterMoving(untouched) {
+	if rollbackRecovers(untouched, true) {
 		t.Error("a failure that never moved the tree offers a rollback that would undo nothing")
 	}
 
@@ -304,7 +304,7 @@ func TestFailedAfterMovingNamesTheRunsThatNeedRecovery(t *testing.T) {
 	rolled := deploy.Result{Paths: []deploy.PathResult{
 		{Path: "/srv/a", Status: store.StatusRolledBack, PreviousSHA: "aaaaaaa", NewSHA: "aaaaaaa"},
 	}}
-	if failedAfterMoving(rolled) {
+	if rollbackRecovers(rolled, true) {
 		t.Error("a rolled-back path still asks to be rolled back")
 	}
 
@@ -312,7 +312,26 @@ func TestFailedAfterMovingNamesTheRunsThatNeedRecovery(t *testing.T) {
 	ok := deploy.Result{Paths: []deploy.PathResult{
 		{Path: "/srv/a", Status: store.StatusSuccess, PreviousSHA: "aaaaaaa", NewSHA: "bbbbbbb"},
 	}}
-	if failedAfterMoving(ok) {
+	if rollbackRecovers(ok, true) {
 		t.Error("a successful deploy is offered a rollback")
+	}
+}
+
+// TestRollbackRecoversNeverPointsARollbackAtItself is the trap the hint set for
+// itself. renderResult is shared by deploy and rollback, and a rollback moves
+// trees too: rollbackTo records new_sha as the commit it restored and
+// previous_sha as the bad one it escaped. So a rollback whose re-run pipeline
+// failed looks exactly like a deploy that failed after moving — and following
+// the hint would call rollbackTargets again, read that row's previous_sha, and
+// reset every checkout forward onto the very commit the operator was undoing.
+func TestRollbackRecoversNeverPointsARollbackAtItself(t *testing.T) {
+	// A rollback that reset the tree and then failed re-running the pipeline the
+	// restored commit carries.
+	res := deploy.Result{Paths: []deploy.PathResult{
+		{Path: "/srv/a", Status: store.StatusFailed, PreviousSHA: "bbbbbbb", NewSHA: "aaaaaaa"},
+	}}
+
+	if rollbackRecovers(res, false) {
+		t.Error("a failed rollback offers another rollback, which would push the checkout back onto the commit it just escaped")
 	}
 }
