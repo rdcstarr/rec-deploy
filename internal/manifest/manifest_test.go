@@ -171,3 +171,50 @@ func TestLoadInvalidFileIsAnError(t *testing.T) {
 		t.Errorf("error %q does not name the directory %s", err, dir)
 	}
 }
+
+func TestParseSetupBlock(t *testing.T) {
+	m, err := Parse([]byte(`
+repository: rdcstarr/proiect
+
+setup:
+  - php artisan key:generate
+  - run: php artisan migrate --seed
+    timeout: 20m
+
+post_deploy:
+  - composer install --no-dev
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if len(m.Setup) != 2 {
+		t.Fatalf("Setup has %d steps, want 2", len(m.Setup))
+	}
+	if got := m.Setup[0]; got.Run != "php artisan key:generate" || got.Timeout != DefaultTimeout {
+		t.Errorf("Setup[0] = %#v", got)
+	}
+	if got := m.Setup[1]; got.Run != "php artisan migrate --seed" || got.Timeout != 20*time.Minute {
+		t.Errorf("Setup[1] = %#v", got)
+	}
+	if len(m.PostDeploy) != 1 {
+		t.Errorf("PostDeploy has %d steps, want 1", len(m.PostDeploy))
+	}
+}
+
+func TestParseWithoutSetupStaysValid(t *testing.T) {
+	m, err := Parse([]byte("repository: owner/repo\npost_deploy:\n  - echo ready\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(m.Setup) != 0 {
+		t.Errorf("Setup = %#v, want empty", m.Setup)
+	}
+}
+
+func TestParseRejectsSetupStepWithoutCommand(t *testing.T) {
+	_, err := Parse([]byte("repository: owner/repo\nsetup:\n  - timeout: 5m\n"))
+	if err == nil || !strings.Contains(err.Error(), "setup[0]") {
+		t.Fatalf("error = %v, want a setup[0] error", err)
+	}
+}

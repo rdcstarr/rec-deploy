@@ -35,6 +35,12 @@ type Manifest struct {
 	// Repository is the owner/repo slug this checkout must belong to. It is
 	// verified against `git remote get-url origin` before anything runs.
 	Repository string `yaml:"repository"`
+	// Setup are the steps prepended to PostDeploy when a deploy is a setup run:
+	// the first install of a checkout, or one an operator asked to repeat. It
+	// holds what is true exactly once — `key:generate`, `storage:link`, a seed —
+	// never a second copy of the ordinary pipeline. Two lists that must agree,
+	// with nothing making them agree, is the drift this shape exists to avoid.
+	Setup []Step `yaml:"setup"`
 	// PostDeploy are the steps run, in order, after a successful git sync. An
 	// empty list is valid: the sync alone is the deploy.
 	PostDeploy []Step `yaml:"post_deploy"`
@@ -179,6 +185,12 @@ func (m *Manifest) validate() error {
 	owner, repo, ok := strings.Cut(m.Repository, "/")
 	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
 		return fmt.Errorf("%s: `repository` must be an owner/repo slug, got %q", Filename, m.Repository)
+	}
+
+	for i, s := range m.Setup {
+		if strings.TrimSpace(s.Run) == "" {
+			return fmt.Errorf("%s: setup[%d] has no command — use a string or an object with `run`", Filename, i)
+		}
 	}
 
 	for i, s := range m.PostDeploy {
