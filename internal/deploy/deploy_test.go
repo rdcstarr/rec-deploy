@@ -1061,6 +1061,41 @@ func TestRunSetupWithoutASetupBlockFails(t *testing.T) {
 	}
 }
 
+// TestRunSetupNamesBothBlocksInItsProgressTitle pins what the operator reads
+// while a first install blocks: the pipeline is setup + post_deploy, so a
+// single title saying only "post_deploy" names the wrong block on the one run
+// that has two.
+func TestRunSetupNamesBothBlocksInItsProgressTitle(t *testing.T) {
+	bare := origin(t, "repository: o/r\nsetup:\n  - echo setup >> order\npost_deploy:\n  - echo post >> order\n")
+	dir := checkout(t, bare, "o/r")
+
+	var titles []string
+	o := opts(t, dir, "o/r", "")
+	o.Setup = true
+	o.Progress = func(title string, action func() error) error {
+		titles = append(titles, title)
+
+		return action()
+	}
+
+	if _, err := Run(context.Background(), o); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var pipeline []string
+	for _, title := range titles {
+		if strings.HasPrefix(title, "Running ") {
+			pipeline = append(pipeline, title)
+		}
+	}
+	if len(pipeline) != 1 {
+		t.Fatalf("pipeline titles = %v, want exactly one over the whole run", pipeline)
+	}
+	if !strings.Contains(pipeline[0], "setup") {
+		t.Errorf("a setup run announced itself as %q, which names the wrong block", pipeline[0])
+	}
+}
+
 func TestSetupFailureDoesNotRollBack(t *testing.T) {
 	bare := origin(t, "repository: o/r\nrollback_on_failure: true\nsetup:\n  - exit 3\npost_deploy:\n  - echo post > marker\n")
 	dir := checkout(t, bare, "o/r")

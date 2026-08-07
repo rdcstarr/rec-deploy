@@ -58,7 +58,8 @@ type Options struct {
 	// KeysDir, LocksDir and KnownHosts are rec-deploy's state paths.
 	KeysDir, LocksDir, KnownHosts string
 	// Progress, when non-nil, wraps each blocking step — discovery, the git
-	// plumbing, the post_deploy pipeline — with a description while it runs. The
+	// plumbing, the whole pipeline the run executes (post_deploy, or setup then
+	// post_deploy) — with a description while it runs. The
 	// signature is ui.Spinner's, so the CLI assigns it directly and the daemon
 	// leaves it nil, which runs the step inline — that is what keeps this package
 	// free of internal/ui. Nothing streams to the terminal; command output is
@@ -186,9 +187,9 @@ func Rollback(ctx context.Context, opts Options) (Result, error) {
 
 // newResult seeds a Result with the push metadata every path result hangs off.
 func newResult(opts Options) Result {
-	pipeline := "post_deploy"
+	pipeline := store.PipelinePostDeploy
 	if opts.Setup {
-		pipeline = "setup"
+		pipeline = store.PipelineSetup
 	}
 
 	return Result{
@@ -324,7 +325,7 @@ func deployPath(ctx context.Context, in discover.Installation, opts Options) Pat
 		return pr
 	}
 
-	stepErr := runPipeline(ctx, opts, steps, exec, &pr)
+	stepErr := runPipeline(ctx, opts, pipelineTitle(opts.Setup), steps, exec, &pr)
 	if stepErr == nil {
 		pr.Status = store.StatusSuccess
 		return pr
@@ -540,19 +541,32 @@ func pipelineSteps(m *manifest.Manifest, setup bool) ([]manifest.Step, error) {
 	return append(slices.Clone(m.Setup), m.PostDeploy...), nil
 }
 
-// runPipeline runs the post_deploy steps in order under one "Running
-// post_deploy…" spinner, recording each. It stops at the first failure unless
-// the step sets continue_on_failure, and folds that step's output excerpt into
-// the error so a suppressed pipeline still fails with a reason — the same debt
-// the git plumbing pays. Every step gets a real timeout — an old implementation
-// parses the timeout and never applies it, so a cold `composer install` dies at
-// Laravel's 60s default.
-func runPipeline(ctx context.Context, opts Options, steps []manifest.Step, exec privexec.Options, pr *PathResult) error {
+// pipelineTitle names, for the operator watching a spinner, the blocks the run
+// is about to execute — the whole list, since a setup run is setup and then
+// post_deploy.
+func pipelineTitle(setup bool) string {
+	if setup {
+		return "Running setup, then post_deploy…"
+	}
+
+	return "Running post_deploy…"
+}
+
+// runPipeline runs steps in order under one spinner titled title, recording
+// each. The title is the caller's because the list is: a setup run is setup
+// then post_deploy, and one title naming a block that is only half of what runs
+// tells the operator the wrong thing on the one run that has two. It stops at
+// the first failure unless the step sets continue_on_failure, and folds that
+// step's output excerpt into the error so a suppressed pipeline still fails with
+// a reason — the same debt the git plumbing pays. Every step gets a real timeout
+// — an old implementation parses the timeout and never applies it, so a cold
+// `composer install` dies at Laravel's 60s default.
+func runPipeline(ctx context.Context, opts Options, title string, steps []manifest.Step, exec privexec.Options, pr *PathResult) error {
 	if len(steps) == 0 {
 		return nil
 	}
 
-	return opts.step("Running post_deploy…", func() error {
+	return opts.step(title, func() error {
 		for _, s := range steps {
 			o := exec
 			o.Timeout = s.Timeout
@@ -590,7 +604,9 @@ func rollbackTo(ctx context.Context, opts Options, sha string, exec privexec.Opt
 		return err
 	}
 
-	return runPipeline(ctx, opts, m.PostDeploy, exec, pr)
+	// A rollback re-runs post_deploy alone, never setup: it undoes a code change,
+	// and the previous tree's install steps are not part of that.
+	return runPipeline(ctx, opts, pipelineTitle(false), m.PostDeploy, exec, pr)
 }
 
 // verifyOrigin re-checks the pulled manifest against the checkout's origin. The
