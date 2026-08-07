@@ -93,7 +93,7 @@ func TestSetupBranchOptionsOffersEveryBranchAndThisServersOwn(t *testing.T) {
 }
 
 // TestSetupBranchOptionsStayUsableWithNoLocalCheckouts is the laptop case, and
-// the reason the hand-typed entry exists: `repo setup` reads no local state by
+// the reason the hand-typed entry exists: `repo setup` requires no local state by
 // design, so discovery routinely finds nothing here. Narrowing must still be
 // reachable — offering only "every branch" would make the widest blast radius
 // the sole option again.
