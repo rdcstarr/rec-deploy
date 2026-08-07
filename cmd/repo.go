@@ -73,7 +73,7 @@ func repoMenuOptions() []ui.Option {
 		ui.DescribedOption{Name: "check", Description: "can GitHub actually deliver a webhook here?", Value: "check"},
 		ui.DescribedOption{Name: "scan", Description: "every checkout discovery finds on this server", Value: "scan"},
 		ui.DescribedOption{Name: "install", Description: "clone a repository into a path", Value: "install"},
-		ui.DescribedOption{Name: "setup", Description: "ask every server registered on a repository to run setup", Value: "setup"},
+		ui.DescribedOption{Name: "setup", Description: "run a repository's setup steps — here, or on every server", Value: "setup"},
 		ui.DescribedOption{Name: "rotate", Description: "roll the webhook secret and the deploy key", Value: "rotate"},
 		ui.DescribedOption{Name: "rollback", Description: "restore a checkout to the commit before its last deploy", Value: "rollback"},
 		ui.DescribedOption{Name: "remove", Description: "delete the key and the webhook on GitHub", Value: "remove"},

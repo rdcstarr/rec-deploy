@@ -33,6 +33,28 @@ func newRepoSetupCmd() *cobra.Command {
 				return cmd.Help()
 			}
 
+			// A flag names the scope outright. Without one, in a terminal, ask:
+			// the two triggers differ by blast radius, which is not a default to
+			// guess at on the operator's behalf.
+			if !isInteractive() || cmd.Flags().Changed("branch") {
+				return requestSetup(cmd.Context(), slug, branch)
+			}
+
+			where, err := selectMenu("Where should setup run?", []ui.Option{
+				{Label: "this server", Value: "local"},
+				{Label: "every server registered on this repository", Value: "fleet"},
+			})
+			if err != nil {
+				return err
+			}
+			if where == "" {
+				// Backed out (Esc / ←) — climb to the repo hub, run nothing.
+				return ui.ErrBack
+			}
+			if where == "local" {
+				return runDeploy(cmd.Context(), slug, "", true)
+			}
+
 			return requestSetup(cmd.Context(), slug, branch)
 		},
 	}
@@ -113,7 +135,7 @@ func requestSetup(ctx context.Context, slug, branch string) error {
 
 	ui.Success("setup requested for " + slug + " — github delivers it to " + plural(ready, "server"))
 	if stale > 0 {
-		ui.Warn(plural(stale, "webhook") + " on this repository does not deliver `repository_dispatch` and will not receive it — run `rec-deploy repo check " + slug + " --repair` on the server behind it")
+		ui.Warn(plural(stale, "webhook") + " on this repository can't deliver `repository_dispatch` and won't receive this request — run `rec-deploy repo check " + slug + " --repair` on the server behind it")
 	}
 	ui.Info("each server reports the result through its own notifications; `rec-deploy logs " + slug + "` shows it there")
 

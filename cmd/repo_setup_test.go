@@ -39,3 +39,12 @@ func TestSetupCmdFlags(t *testing.T) {
 		t.Errorf("Long does not say the dispatch reaches every server: %q", cmd.Long)
 	}
 }
+
+func TestRepoMenuOffersSetup(t *testing.T) {
+	for _, o := range repoMenuOptions() {
+		if o.Value == "setup" {
+			return
+		}
+	}
+	t.Error("the repo hub does not offer setup")
+}
