@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +49,10 @@ type Options struct {
 	RollbackSHAs map[string]string
 	// Path restricts the deploy to one installation.
 	Path string
+	// Setup prepends the manifest's setup block to post_deploy. It is a first
+	// install — `repo install`, or `repo deploy --setup` — or one an operator
+	// asked to repeat from a laptop through a repository_dispatch.
+	Setup bool
 	// Roots and Prune configure discovery.
 	Roots, Prune []string
 	// KeysDir, LocksDir and KnownHosts are rec-deploy's state paths.
@@ -109,13 +114,16 @@ type PathResult struct {
 
 // Result is the whole deploy, fanned out over every installation.
 type Result struct {
-	Repository string       `json:"repository"`
-	Ref        string       `json:"ref,omitempty"`
-	SHA        string       `json:"sha,omitempty"`
-	Message    string       `json:"message,omitempty"`
-	Author     string       `json:"author,omitempty"`
-	Status     string       `json:"status"`
-	Paths      []PathResult `json:"paths"`
+	Repository string `json:"repository"`
+	Ref        string `json:"ref,omitempty"`
+	SHA        string `json:"sha,omitempty"`
+	Message    string `json:"message,omitempty"`
+	Author     string `json:"author,omitempty"`
+	// Pipeline names what ran: "setup" or "post_deploy". It is the only record
+	// of which one a past run used, since the command output goes to the store.
+	Pipeline string       `json:"pipeline"`
+	Status   string       `json:"status"`
+	Paths    []PathResult `json:"paths"`
 }
 
 // Run deploys every installation of opts.Repository. Zero installations is an
@@ -178,12 +186,18 @@ func Rollback(ctx context.Context, opts Options) (Result, error) {
 
 // newResult seeds a Result with the push metadata every path result hangs off.
 func newResult(opts Options) Result {
+	pipeline := "post_deploy"
+	if opts.Setup {
+		pipeline = "setup"
+	}
+
 	return Result{
 		Repository: opts.Repository,
 		Ref:        opts.Ref,
 		SHA:        opts.SHA,
 		Message:    opts.Message,
 		Author:     opts.Author,
+		Pipeline:   pipeline,
 	}
 }
 
@@ -304,7 +318,13 @@ func deployPath(ctx context.Context, in discover.Installation, opts Options) Pat
 		return pr
 	}
 
-	stepErr := runPipeline(ctx, opts, m.PostDeploy, exec, &pr)
+	steps, err := pipelineSteps(m, opts.Setup)
+	if err != nil {
+		pr.Status, pr.Reason = store.StatusFailed, err.Error()
+		return pr
+	}
+
+	stepErr := runPipeline(ctx, opts, steps, exec, &pr)
 	if stepErr == nil {
 		pr.Status = store.StatusSuccess
 		return pr
@@ -312,7 +332,12 @@ func deployPath(ctx context.Context, in discover.Installation, opts Options) Pat
 
 	pr.Reason = stepErr.Error()
 
-	if !m.RollbackOnFailure {
+	// A setup run is never rolled back. Rollback undoes a code change that broke
+	// a deploy — it resets the tree and re-runs the previous manifest's
+	// post_deploy — but a setup run usually moves no code at all, and re-running
+	// post_deploy over a half-finished install undoes nothing. The tree is left
+	// where it is, with the failing step's output as the reason.
+	if opts.Setup || !m.RollbackOnFailure {
 		pr.Status = store.StatusFailed
 		return pr
 	}
@@ -491,6 +516,28 @@ func prepare(ctx context.Context, in discover.Installation, opts Options) (prive
 	}
 
 	return exec, cleanup, nil
+}
+
+// pipelineSteps returns the commands one deploy runs. A setup run prepends the
+// manifest's setup block to post_deploy rather than replacing it: the install
+// commands every deploy shares are written once, in post_deploy, so a freshly
+// installed checkout cannot end up configured differently from a deployed one.
+//
+// A setup that was asked for and does not exist is an error, not a quiet
+// fallback: an empty post_deploy is a legitimate "pull the code, run nothing",
+// but reporting success for a pipeline the operator named and the manifest does
+// not have is the defect this package exists to prevent.
+func pipelineSteps(m *manifest.Manifest, setup bool) ([]manifest.Step, error) {
+	if !setup {
+		return m.PostDeploy, nil
+	}
+	if len(m.Setup) == 0 {
+		return nil, errors.New("the manifest declares no `setup` block — add one, or deploy without `--setup`")
+	}
+
+	// Cloned, not appended in place: m.Setup may have spare capacity from the
+	// YAML decode, and appending onto it would write into the manifest's array.
+	return append(slices.Clone(m.Setup), m.PostDeploy...), nil
 }
 
 // runPipeline runs the post_deploy steps in order under one "Running

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rdcstarr/rec-deploy/internal/discover"
+	"github.com/rdcstarr/rec-deploy/internal/manifest"
 	"github.com/rdcstarr/rec-deploy/internal/privexec"
 )
 
@@ -971,5 +972,109 @@ func TestRunRecordsAFailedPipelineStepsFullOutput(t *testing.T) {
 		if !strings.Contains(cmd.Output, want) {
 			t.Errorf("Output = %q, want the full tail to contain %q", cmd.Output, want)
 		}
+	}
+}
+
+func TestPipelineStepsPrependsSetup(t *testing.T) {
+	m := &manifest.Manifest{
+		Setup:      []manifest.Step{{Run: "a"}},
+		PostDeploy: []manifest.Step{{Run: "b"}},
+	}
+
+	steps, err := pipelineSteps(m, true)
+	if err != nil {
+		t.Fatalf("pipelineSteps: %v", err)
+	}
+	if len(steps) != 2 || steps[0].Run != "a" || steps[1].Run != "b" {
+		t.Fatalf("steps = %#v, want [a b]", steps)
+	}
+
+	// The manifest is the caller's; joining must not write post_deploy's steps
+	// into the setup slice's own backing array.
+	if len(m.Setup) != 1 || m.Setup[0].Run != "a" {
+		t.Errorf("m.Setup = %#v, want it unchanged", m.Setup)
+	}
+
+	plain, err := pipelineSteps(m, false)
+	if err != nil {
+		t.Fatalf("pipelineSteps: %v", err)
+	}
+	if len(plain) != 1 || plain[0].Run != "b" {
+		t.Errorf("steps = %#v, want [b]", plain)
+	}
+}
+
+func TestPipelineStepsRejectsSetupWithoutABlock(t *testing.T) {
+	_, err := pipelineSteps(&manifest.Manifest{PostDeploy: []manifest.Step{{Run: "b"}}}, true)
+	if err == nil || !strings.Contains(err.Error(), "setup") {
+		t.Fatalf("error = %v, want a missing-setup-block error", err)
+	}
+}
+
+func TestRunSetupRunsSetupThenPostDeploy(t *testing.T) {
+	bare := origin(t, "repository: o/r\nsetup:\n  - echo setup >> order\npost_deploy:\n  - echo post >> order\n")
+	dir := checkout(t, bare, "o/r")
+
+	o := opts(t, dir, "o/r", "")
+	o.Setup = true
+
+	res, err := Run(context.Background(), o)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Pipeline != "setup" {
+		t.Errorf("Pipeline = %q, want setup", res.Pipeline)
+	}
+	if len(res.Paths) != 1 || len(res.Paths[0].Commands) != 2 {
+		t.Fatalf("Paths = %+v", res.Paths)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "order"))
+	if err != nil {
+		t.Fatalf("read order: %v", err)
+	}
+	if string(got) != "setup\npost\n" {
+		t.Errorf("order = %q, want \"setup\\npost\\n\"", got)
+	}
+}
+
+func TestRunSetupWithoutASetupBlockFails(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo post > marker\n")
+	dir := checkout(t, bare, "o/r")
+
+	o := opts(t, dir, "o/r", "")
+	o.Setup = true
+
+	res, err := Run(context.Background(), o)
+	if err == nil {
+		t.Fatal("Run: want an error")
+	}
+	if len(res.Paths) != 1 || res.Paths[0].Status != "failed" {
+		t.Fatalf("Paths = %+v", res.Paths)
+	}
+	if !strings.Contains(res.Paths[0].Reason, "setup") {
+		t.Errorf("Reason = %q, want it to name the missing setup block", res.Paths[0].Reason)
+	}
+	// post_deploy must not have run as a consolation prize.
+	if _, err := os.Stat(filepath.Join(dir, "marker")); err == nil {
+		t.Error("post_deploy ran for a setup that does not exist")
+	}
+}
+
+func TestSetupFailureDoesNotRollBack(t *testing.T) {
+	bare := origin(t, "repository: o/r\nrollback_on_failure: true\nsetup:\n  - exit 3\npost_deploy:\n  - echo post > marker\n")
+	dir := checkout(t, bare, "o/r")
+
+	o := opts(t, dir, "o/r", "")
+	o.Setup = true
+
+	res, _ := Run(context.Background(), o)
+	if len(res.Paths) != 1 || res.Paths[0].Status != "failed" {
+		t.Fatalf("Status = %+v, want failed and not rolled_back", res.Paths)
+	}
+	// A rollback would reset the tree and re-run the previous manifest's
+	// post_deploy, which would create the marker. Nothing may have run.
+	if _, err := os.Stat(filepath.Join(dir, "marker")); err == nil {
+		t.Error("a failed setup rolled back and re-ran post_deploy")
 	}
 }
