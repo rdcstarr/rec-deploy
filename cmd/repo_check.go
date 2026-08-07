@@ -3,24 +3,29 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/rdcstarr/rec-deploy/internal/github"
+	"github.com/rdcstarr/rec-deploy/internal/store"
 	"github.com/rdcstarr/rec-deploy/internal/ui"
 )
 
 // newRepoCheckCmd builds `repo check owner/repo`.
 func newRepoCheckCmd() *cobra.Command {
-	return &cobra.Command{
+	var repair bool
+
+	cmd := &cobra.Command{
 		Use:   "check <owner/repo>",
 		Short: "Check that GitHub can deliver a webhook to this server",
 		Long: "check compares the webhook GitHub holds against the one this server would register today, " +
-			"then triggers a ping and reports what GitHub recorded — so \"will a push actually deploy?\" is a command rather than an investigation.",
+			"then triggers a ping and reports what GitHub recorded — so \"will a push actually deploy?\" is a command rather than an investigation. " +
+			"--repair rewrites GitHub's copy to match, without rolling the deploy key or the webhook secret.",
 		Args:    cobra.MaximumNArgs(1),
-		Example: "rec-deploy repo check rdcstarr/tema-mea",
+		Example: "rec-deploy repo check rdcstarr/tema-mea\nrec-deploy repo check rdcstarr/tema-mea --repair",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slug, ok, err := pickRepo(cmd.Context(), args, "Repository to check")
 			if err != nil {
@@ -30,16 +35,21 @@ func newRepoCheckCmd() *cobra.Command {
 				return cmd.Help()
 			}
 
-			return checkRepo(cmd.Context(), slug)
+			return checkRepo(cmd.Context(), slug, repair)
 		},
 	}
+
+	cmd.Flags().BoolVar(&repair, "repair", false, "rewrite github's copy of the webhook to match this server")
+
+	return cmd
 }
 
 // checkRepo answers whether a push to slug would actually deploy. It reads
 // GitHub's own copy of the webhook first — that catches an address this server
 // no longer serves with no delivery and no ambiguity — and then proves the rest
-// of the chain with a live ping.
-func checkRepo(ctx context.Context, slug string) error {
+// of the chain with a live ping. repair, when set, rewrites GitHub's copy to
+// match this server before the result is reported.
+func checkRepo(ctx context.Context, slug string, repair bool) error {
 	st, err := openStore(ctx)
 	if err != nil {
 		return err
@@ -82,11 +92,20 @@ func checkRepo(ctx context.Context, slug string) error {
 	verdict := verifyWebhook(ctx, client, repo)
 
 	if flagJSON {
+		repaired := repair && len(drift) > 0
+		if repaired {
+			if err := repairHook(ctx, client, repo, want, drift); err != nil {
+				return err
+			}
+			drift = nil
+		}
+
 		if err := ui.PrintJSON(map[string]any{
 			"repository": repo.Repository,
 			"hook_id":    repo.GitHubHookID,
 			"active":     hook.Active,
 			"drift":      drift,
+			"repaired":   repaired,
 			"webhook":    reachabilityJSON(verdict),
 		}); err != nil {
 			return err
@@ -110,7 +129,16 @@ func checkRepo(ctx context.Context, slug string) error {
 		for _, issue := range drift {
 			ui.KeyValue("drift", issue)
 		}
-		ui.KeyList("fix", []string{"re-point it with `rec-deploy repo rotate " + slug + " --yes`"})
+
+		if !repair {
+			ui.KeyList("fix", []string{"rewrite it with `rec-deploy repo check " + slug + " --repair`"})
+			break
+		}
+
+		if err := repairHook(ctx, client, repo, want, drift); err != nil {
+			return err
+		}
+		drift = nil
 	}
 
 	ui.Out("")
@@ -141,6 +169,9 @@ func hookDrift(got github.Hook, want string) []string {
 	}
 	if !got.Active {
 		issues = append(issues, "the webhook is deactivated on github, so it delivers nothing")
+	}
+	if !got.Delivers("repository_dispatch") {
+		issues = append(issues, "github does not deliver `repository_dispatch` to this hook, so `rec-deploy repo setup` will not reach this server")
 	}
 
 	return issues
@@ -180,6 +211,40 @@ func webhookExit(r github.Reachability, drift []string) error {
 	if webhookFailed(r, drift) && (flagJSON || !isInteractive()) {
 		return errWebhookUnreachable
 	}
+
+	return nil
+}
+
+// repairHook rewrites GitHub's copy of this server's webhook to what the server
+// would register today: its own URL, the secret already in the store, and every
+// event it needs. The deploy key and the HMAC secret are not rolled — that is
+// `repo rotate`'s job, and rolling them to add a word to an event list is a
+// blast radius nobody asked for.
+//
+// It writes to GitHub, so it confirms in a terminal and demands --yes anywhere
+// else.
+func repairHook(ctx context.Context, client *github.Client, repo store.Repo, want string, drift []string) error {
+	if !flagYes {
+		if !isInteractive() {
+			return fmt.Errorf("repairing the webhook of %s rewrites it on github — re-run with `--yes`", repo.Repository)
+		}
+
+		ok, err := ui.Confirm("Rewrite the webhook of "+repo.Repository+" on github?", "\n  "+strings.Join(drift, "\n  "))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ui.ErrBack
+		}
+	}
+
+	if err := ui.Spinner("Rewriting the webhook on GitHub…", func() error {
+		return client.UpdateHook(ctx, repo.Repository, repo.GitHubHookID, want, repo.Secret)
+	}); err != nil {
+		return err
+	}
+
+	ui.Success("github's copy of the webhook now matches this server")
 
 	return nil
 }

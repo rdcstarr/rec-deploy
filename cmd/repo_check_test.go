@@ -9,15 +9,16 @@ import (
 
 func TestHookDrift(t *testing.T) {
 	const want = "http://1.2.3.4:9000/hook/abc"
+	subscribed := []string{"push", "repository_dispatch"}
 
-	if got := hookDrift(github.Hook{URL: want, Active: true}, want); len(got) != 0 {
+	if got := hookDrift(github.Hook{URL: want, Active: true, Events: subscribed}, want); len(got) != 0 {
 		t.Errorf("hookDrift on a matching hook = %q, want none", got)
 	}
 
 	// Nothing re-points an existing hook when public_url changes, so GitHub keeps
 	// delivering to the old address and no delivery ever reaches this server.
 	// Both addresses are named: "they differ" is not something an operator can act on.
-	got := hookDrift(github.Hook{URL: "http://5.6.7.8:9000/hook/abc", Active: true}, want)
+	got := hookDrift(github.Hook{URL: "http://5.6.7.8:9000/hook/abc", Active: true, Events: subscribed}, want)
 	if len(got) != 1 {
 		t.Fatalf("hookDrift on a moved hook = %q, want one issue", got)
 	}
@@ -25,12 +26,30 @@ func TestHookDrift(t *testing.T) {
 		t.Errorf("issue = %q, want it to name both addresses", got[0])
 	}
 
-	if got := hookDrift(github.Hook{URL: want, Active: false}, want); len(got) != 1 {
+	if got := hookDrift(github.Hook{URL: want, Active: false, Events: subscribed}, want); len(got) != 1 {
 		t.Errorf("hookDrift on a deactivated hook = %q, want one issue", got)
 	}
 
-	if got := hookDrift(github.Hook{URL: "http://5.6.7.8:9000/hook/abc"}, want); len(got) != 2 {
+	if got := hookDrift(github.Hook{URL: "http://5.6.7.8:9000/hook/abc", Events: subscribed}, want); len(got) != 2 {
 		t.Errorf("hookDrift on a moved and deactivated hook = %q, want two issues", got)
+	}
+}
+
+func TestHookDriftReportsAMissingDispatchSubscription(t *testing.T) {
+	const want = "http://1.2.3.4:9000/hook/abc"
+
+	got := hookDrift(github.Hook{URL: want, Active: true, Events: []string{"push"}}, want)
+	if len(got) != 1 || !strings.Contains(got[0], "repository_dispatch") {
+		t.Fatalf("drift = %v, want one line naming repository_dispatch", got)
+	}
+}
+
+func TestHookDriftIsSilentWhenBothEventsAreSubscribed(t *testing.T) {
+	const want = "http://1.2.3.4:9000/hook/abc"
+
+	got := hookDrift(github.Hook{URL: want, Active: true, Events: []string{"push", "repository_dispatch"}}, want)
+	if len(got) != 0 {
+		t.Errorf("drift = %v, want none", got)
 	}
 }
 
@@ -76,7 +95,7 @@ func TestHookDriftSaysNothingAboutAHookThatIsGone(t *testing.T) {
 // into an issue must not hand that token over.
 func TestHookDriftRedactsTheDeliveryToken(t *testing.T) {
 	got := hookDrift(
-		github.Hook{URL: "http://5.6.7.8:9000/hook/s3cret-token-value", Active: true},
+		github.Hook{URL: "http://5.6.7.8:9000/hook/s3cret-token-value", Active: true, Events: []string{"push", "repository_dispatch"}},
 		"http://1.2.3.4:9000/hook/s3cret-token-value",
 	)
 
