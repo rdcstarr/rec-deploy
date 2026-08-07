@@ -153,6 +153,24 @@ func TestHooksReadsIDAndEvents(t *testing.T) {
 	}
 }
 
+// TestDeliversUnderstandsTheWildcard covers the subscription GitHub really
+// accepts and rec-deploy never writes: a hook created with events ["*"]
+// receives every event there is, so reading the list literally would report a
+// hook that delivers everything as one that delivers nothing.
+func TestDeliversUnderstandsTheWildcard(t *testing.T) {
+	h := Hook{Active: true, Events: []string{"*"}}
+
+	if !h.Delivers("repository_dispatch") {
+		t.Error("Delivers(repository_dispatch) = false on a hook subscribed to every event")
+	}
+	if !h.Delivers("push") {
+		t.Error("Delivers(push) = false on a hook subscribed to every event")
+	}
+	if (Hook{Events: []string{"push"}}).Delivers("repository_dispatch") {
+		t.Error("Delivers(repository_dispatch) = true on a push-only hook")
+	}
+}
+
 func TestUserReadsScopesFromTheHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-OAuth-Scopes", "repo, admin:repo_hook")

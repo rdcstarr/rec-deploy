@@ -3,6 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"path"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -92,7 +95,7 @@ func requestSetup(ctx context.Context, slug, branch string) error {
 
 	ready, stale := dispatchReach(hooks)
 	if ready == 0 {
-		return fmt.Errorf("no webhook on %s delivers `repository_dispatch`, so a setup request would reach no server — run `rec-deploy repo check %s --repair` on each server that deploys it", slug, slug)
+		return fmt.Errorf("no rec-deploy webhook on %s delivers `repository_dispatch`, so a setup request would reach no server — run `rec-deploy repo check %s --repair` on each server that deploys it", slug, slug)
 	}
 
 	target := "every checkout"
@@ -136,22 +139,29 @@ func requestSetup(ctx context.Context, slug, branch string) error {
 
 	ui.Success("setup requested for " + slug + " — github delivers it to " + plural(ready, "server"))
 	if stale > 0 {
-		ui.Warn(plural(stale, "webhook") + " on this repository can't deliver `repository_dispatch` and won't receive this request — run `rec-deploy repo check " + slug + " --repair` on the server behind it")
+		ui.Warn(plural(stale, "rec-deploy webhook") + " on this repository can't deliver `repository_dispatch` and won't receive this request — the server behind each one fixes its own with `rec-deploy repo check " + slug + " --repair`")
 	}
 	ui.Info("each server reports the result through its own notifications; `rec-deploy logs " + slug + "` shows it there")
 
 	return nil
 }
 
-// dispatchReach counts the repository's webhooks that would receive a dispatch,
-// and those that would not. An inactive hook delivers nothing whatever it
-// subscribes to, so it counts as unreachable.
+// dispatchReach counts rec-deploy's own webhooks on the repository: those that
+// would receive a dispatch, and those that would not. An inactive hook delivers
+// nothing whatever it subscribes to, so it counts as unreachable.
 //
 // It returns counts and never the hooks themselves: a webhook URL's path segment
 // is the delivery token of the server behind it, and this command runs against
 // repositories whose other servers are none of the operator's business.
 func dispatchReach(hooks []github.Hook) (ready, stale int) {
 	for _, h := range hooks {
+		// Someone else's webhook answers for no rec-deploy server. Counted
+		// ready it would prove a dispatch lands where nothing runs; counted
+		// stale it would send the operator to repair a server that does not
+		// exist behind a Slack app.
+		if !recDeployHook(h) {
+			continue
+		}
 		if h.Active && h.Delivers("repository_dispatch") {
 			ready++
 			continue
@@ -160,4 +170,23 @@ func dispatchReach(hooks []github.Hook) (ready, stale int) {
 	}
 
 	return ready, stale
+}
+
+// recDeployHook reports whether a webhook is one rec-deploy registered, from the
+// listing alone and without printing any part of it. github.HookURL builds every
+// one of them as <public_url>/hook/<token>, so a `/hook/` segment followed by a
+// token is the signature — and it holds for a public_url that carries a path of
+// its own.
+//
+// It is a heuristic: GitHub's API does not say which tool created a hook. But it
+// is a far better one than the alternative it replaces, which was to assume that
+// every webhook on the repository is a rec-deploy server.
+func recDeployHook(h github.Hook) bool {
+	u, err := url.Parse(strings.TrimSpace(h.URL))
+	if err != nil {
+		return false
+	}
+	dir, token := path.Split(u.Path)
+
+	return token != "" && strings.HasSuffix(dir, "/hook/")
 }

@@ -68,8 +68,13 @@ type Hook struct {
 // Delivers reports whether GitHub sends event to this hook. A hook registered
 // before rec-deploy subscribed to repository_dispatch delivers pushes and
 // nothing else, so `repo setup` would never reach the server behind it.
+//
+// "*" is GitHub's own wildcard for "every event, including ones added later".
+// rec-deploy never registers it, but a hook created by hand or by another tool
+// may carry it, and read literally such a hook — which receives everything —
+// would report that it receives nothing.
 func (h Hook) Delivers(event string) bool {
-	return slices.Contains(h.Events, event)
+	return slices.Contains(h.Events, event) || slices.Contains(h.Events, "*")
 }
 
 // Hook reads one webhook's own record of itself.
