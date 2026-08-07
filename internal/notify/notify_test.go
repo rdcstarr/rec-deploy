@@ -78,6 +78,25 @@ func TestSubject(t *testing.T) {
 	}
 }
 
+// TestSummaryNamesASetupRun pins why this field exists: an install that ran
+// unattended across a fleet (a repository_dispatch, which carries no ref)
+// must not render identically to a routine push. The plain body is what
+// journald logs and what Telegram falls back to, so this is the floor every
+// channel has to clear.
+func TestSummaryNamesASetupRun(t *testing.T) {
+	sum := Summary{
+		Repository: "rdcstarr/tema",
+		Status:     "success",
+		Pipeline:   "setup",
+		Paths:      []PathSummary{{Path: "/var/www/site", User: "andrei", Status: "success"}},
+	}
+
+	got := Render(sum)
+	if !strings.Contains(strings.ToLower(got), "setup") {
+		t.Errorf("a setup run rendered as an ordinary deploy:\n%s", got)
+	}
+}
+
 // TestSendUpdateWithNoChannelsConfigured: journald always gets it and the
 // optional channels are skipped. Best-effort means it never panics and never
 // blocks — an update notification must not be able to fail an update that

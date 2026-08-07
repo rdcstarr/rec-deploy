@@ -112,6 +112,23 @@ func TestRenderTelegramHTMLContent(t *testing.T) {
 	}
 }
 
+// TestRenderTelegramHTMLNamesASetupRun checks a dispatch-triggered setup run
+// (no ref, so the code line's branch slot is otherwise blank) says "setup"
+// right there instead of leaving it empty — the fleet-wide install must not
+// read like an ordinary deploy.
+func TestRenderTelegramHTMLNamesASetupRun(t *testing.T) {
+	html := RenderTelegramHTML(Summary{
+		Repository: "repo",
+		Author:     "rdcstarr",
+		Status:     "success",
+		Pipeline:   "setup",
+	})
+
+	if !strings.Contains(html, "<code>repo@setup</code>") {
+		t.Errorf("setup run does not name itself in the branch slot:\n%s", html)
+	}
+}
+
 // TestRenderTelegramHTMLOmitsPreWhenNoPaths checks a Summary with no paths
 // (e.g. the notify test probe) renders no empty <pre> block.
 func TestRenderTelegramHTMLOmitsPreWhenNoPaths(t *testing.T) {

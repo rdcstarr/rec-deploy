@@ -16,6 +16,7 @@ func toJournald(s Summary, body string) {
 		"ref", s.Ref,
 		"sha", s.SHA,
 		"status", s.Status,
+		"pipeline", s.Pipeline,
 		"paths", len(s.Paths),
 		"summary", body,
 	)

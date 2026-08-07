@@ -28,7 +28,10 @@ type Summary struct {
 	// Error is set when the deploy failed before reaching any path — a zero
 	// installation count, for instance, which an old implementation reports as silence.
 	Error string
-	Paths []PathSummary
+	// Pipeline names what ran: "setup" or "post_deploy". An install that ran
+	// unattended across a fleet must not look like a routine push.
+	Pipeline string
+	Paths    []PathSummary
 }
 
 // PathSummary is one installation's outcome.
@@ -42,9 +45,26 @@ type PathSummary struct {
 
 // Subject is the one-line headline: repository, branch, outcome.
 func Subject(s Summary) string {
-	branch := strings.TrimPrefix(s.Ref, "refs/heads/")
+	return fmt.Sprintf("rec-deploy: %s@%s %s", s.Repository, branchLabel(s), s.Status)
+}
 
-	return fmt.Sprintf("rec-deploy: %s@%s %s", s.Repository, branch, s.Status)
+// branchLabel is what every renderer shows where the pushed branch would
+// sit: the branch name for an ordinary deploy, or "setup" when there is none
+// to show — a first install, `repo deploy --setup`, and a repository_dispatch
+// sent to no particular branch are all refless, and that slot is exactly
+// where a routine push would name its branch. Left blank, a setup run that
+// went out unattended across a fleet reads identically to an ordinary push;
+// filled with "setup", it reads as what it is at a glance, in the same spot
+// every other run already uses to say so.
+func branchLabel(s Summary) string {
+	if branch := strings.TrimPrefix(s.Ref, "refs/heads/"); branch != "" {
+		return branch
+	}
+	if s.Pipeline == "setup" {
+		return "setup"
+	}
+
+	return ""
 }
 
 // Render builds the plain-text body every channel sends.

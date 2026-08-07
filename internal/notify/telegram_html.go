@@ -52,11 +52,10 @@ func telegramPathGlyph(status string) string {
 // card's own tags and glyphs are Go constants, never interpolated.
 func RenderTelegramHTML(s Summary) string {
 	glyph, word := telegramVerdict(s.Status)
-	branch := strings.TrimPrefix(s.Ref, "refs/heads/")
 
 	var b strings.Builder
 	b.WriteString("<b>" + glyph + " " + esc(word) + "</b>\n")
-	b.WriteString("<code>" + esc(s.Repository) + "@" + esc(branch) + "</code>")
+	b.WriteString("<code>" + esc(s.Repository) + "@" + esc(branchLabel(s)) + "</code>")
 	if host := hostname(); host != "" {
 		b.WriteString(" on " + esc(host))
 	}

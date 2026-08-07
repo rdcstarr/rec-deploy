@@ -84,7 +84,7 @@ func RenderHTML(s Summary) (string, error) {
 	v := emailView{
 		Subject:     Subject(s),
 		Repository:  s.Repository,
-		Branch:      strings.TrimPrefix(s.Ref, "refs/heads/"),
+		Branch:      branchLabel(s),
 		SHA7:        short(s.SHA),
 		Author:      s.Author,
 		MessageLine: firstLine(s.Message),

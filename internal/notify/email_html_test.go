@@ -107,6 +107,25 @@ func TestRenderHTMLFailureBody(t *testing.T) {
 	}
 }
 
+// TestRenderHTMLNamesASetupRun checks a dispatch-triggered setup run (no ref,
+// so the push line's branch slot is otherwise blank) says "setup" right
+// there instead of leaving it empty — the fleet-wide install must not read
+// like an ordinary deploy.
+func TestRenderHTMLNamesASetupRun(t *testing.T) {
+	html, err := RenderHTML(Summary{
+		Repository: "rdcstarr/tema",
+		Status:     "success",
+		Pipeline:   "setup",
+	})
+	if err != nil {
+		t.Fatalf("RenderHTML: %v", err)
+	}
+
+	if !strings.Contains(html, "→ rdcstarr/tema@setup") {
+		t.Errorf("setup run does not name itself in the branch slot:\n%s", html)
+	}
+}
+
 // TestRenderHTMLNeutralStatuses checks that outcomes which are neither success
 // nor failure — a skipped deploy (branch filter) or the try-it notification
 // from `rec-deploy init` — get the amber "›" verdict and never borrow the

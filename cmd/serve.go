@@ -328,6 +328,7 @@ func recordResult(ctx context.Context, st *store.Store, cfg *config.Config, depl
 		Message:    res.Message,
 		Author:     res.Author,
 		Status:     res.Status,
+		Pipeline:   res.Pipeline,
 	}
 	if runErr != nil {
 		sum.Error = runErr.Error()
