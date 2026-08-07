@@ -290,6 +290,27 @@ func deployPath(ctx context.Context, in discover.Installation, opts Options) Pat
 	}
 	defer cleanup()
 
+	// A setup run is answered against the code already on disk, before git
+	// touches anything. The pulled manifest is what actually runs — the deploy
+	// steps version with the code — but by the time it is read the tree has been
+	// fast-forwarded and `git clean -fd` has deleted every untracked file, and a
+	// `repo setup` dispatch lands on every server registered on the repository at
+	// once. The overwhelmingly common mistake is a repository whose checked-out
+	// code declares no setup block at all, so refusing here costs a correct
+	// checkout nothing and protects the whole fleet from a run that moves every
+	// tree and then executes nothing.
+	//
+	// A missing or unparseable manifest is deliberately not refused here: the pull
+	// may well bring a valid one, and that is the existing contract.
+	if opts.Setup {
+		if m, mErr := manifest.Load(in.Path); mErr == nil && len(m.Setup) == 0 {
+			pr.Status = store.StatusFailed
+			pr.Reason = "the checked-out code declares no `setup` block, so nothing was pulled and nothing ran — add one, or deploy without `--setup`"
+
+			return pr
+		}
+	}
+
 	// The rollback point, recorded before anything moves.
 	if pr.PreviousSHA, err = headSHA(ctx, opts, &pr, exec); err != nil {
 		pr.Status, pr.Reason = store.StatusFailed, err.Error()
@@ -319,13 +340,25 @@ func deployPath(ctx context.Context, in discover.Installation, opts Options) Pat
 		return pr
 	}
 
-	steps, err := pipelineSteps(m, opts.Setup)
-	if err != nil {
-		pr.Status, pr.Reason = store.StatusFailed, err.Error()
+	steps, title := pipelineSteps(m, opts.Setup)
+	stepErr := runPipeline(ctx, opts, title, steps, exec, &pr)
+
+	// The pulled code has no setup block, and the pre-sync guard let this path
+	// through — the checkout carried one before the pull, or had no readable
+	// manifest at all. The tree has already moved, so refusing outright would
+	// leave the checkout on a new commit with nothing built; post_deploy ran
+	// instead, and the path still fails, because the setup the operator asked for
+	// is not in the code that arrived.
+	if opts.Setup && len(m.Setup) == 0 {
+		pr.Status = store.StatusFailed
+		pr.Reason = "the pulled code declares no `setup` block, so the setup that was asked for did not run; post_deploy ran instead, so the tree is not left unbuilt"
+		if stepErr != nil {
+			pr.Reason += "; post_deploy failed: " + stepErr.Error()
+		}
+
 		return pr
 	}
 
-	stepErr := runPipeline(ctx, opts, pipelineTitle(opts.Setup), steps, exec, &pr)
 	if stepErr == nil {
 		pr.Status = store.StatusSuccess
 		return pr
@@ -519,26 +552,25 @@ func prepare(ctx context.Context, in discover.Installation, opts Options) (prive
 	return exec, cleanup, nil
 }
 
-// pipelineSteps returns the commands one deploy runs. A setup run prepends the
-// manifest's setup block to post_deploy rather than replacing it: the install
-// commands every deploy shares are written once, in post_deploy, so a freshly
-// installed checkout cannot end up configured differently from a deployed one.
+// pipelineSteps returns the commands one deploy runs and the title they run
+// under. A setup run prepends the manifest's setup block to post_deploy rather
+// than replacing it: the install commands every deploy shares are written once,
+// in post_deploy, so a freshly installed checkout cannot end up configured
+// differently from a deployed one.
 //
-// A setup that was asked for and does not exist is an error, not a quiet
-// fallback: an empty post_deploy is a legitimate "pull the code, run nothing",
-// but reporting success for a pipeline the operator named and the manifest does
-// not have is the defect this package exists to prevent.
-func pipelineSteps(m *manifest.Manifest, setup bool) ([]manifest.Step, error) {
-	if !setup {
-		return m.PostDeploy, nil
-	}
-	if len(m.Setup) == 0 {
-		return nil, errors.New("the manifest declares no `setup` block — add one, or deploy without `--setup`")
+// A setup run whose pulled manifest declares no setup block falls back to
+// post_deploy alone, and the caller fails the path for it. It cannot refuse
+// here: by the time the pulled manifest is read the tree has already been synced,
+// and a tree that has moved must never end a run with no pipeline executed. The
+// refusal that protects a tree happens before the sync, in deployPath.
+func pipelineSteps(m *manifest.Manifest, setup bool) (steps []manifest.Step, title string) {
+	if !setup || len(m.Setup) == 0 {
+		return m.PostDeploy, pipelineTitle(false)
 	}
 
 	// Cloned, not appended in place: m.Setup may have spare capacity from the
 	// YAML decode, and appending onto it would write into the manifest's array.
-	return append(slices.Clone(m.Setup), m.PostDeploy...), nil
+	return append(slices.Clone(m.Setup), m.PostDeploy...), pipelineTitle(true)
 }
 
 // pipelineTitle names, for the operator watching a spinner, the blocks the run

@@ -981,12 +981,12 @@ func TestPipelineStepsPrependsSetup(t *testing.T) {
 		PostDeploy: []manifest.Step{{Run: "b"}},
 	}
 
-	steps, err := pipelineSteps(m, true)
-	if err != nil {
-		t.Fatalf("pipelineSteps: %v", err)
-	}
+	steps, title := pipelineSteps(m, true)
 	if len(steps) != 2 || steps[0].Run != "a" || steps[1].Run != "b" {
 		t.Fatalf("steps = %#v, want [a b]", steps)
+	}
+	if !strings.Contains(title, "setup") {
+		t.Errorf("title = %q, want it to name the setup block", title)
 	}
 
 	// The manifest is the caller's; joining must not write post_deploy's steps
@@ -995,19 +995,27 @@ func TestPipelineStepsPrependsSetup(t *testing.T) {
 		t.Errorf("m.Setup = %#v, want it unchanged", m.Setup)
 	}
 
-	plain, err := pipelineSteps(m, false)
-	if err != nil {
-		t.Fatalf("pipelineSteps: %v", err)
-	}
+	plain, plainTitle := pipelineSteps(m, false)
 	if len(plain) != 1 || plain[0].Run != "b" {
 		t.Errorf("steps = %#v, want [b]", plain)
 	}
+	if strings.Contains(plainTitle, "setup") {
+		t.Errorf("title = %q, want post_deploy alone", plainTitle)
+	}
 }
 
-func TestPipelineStepsRejectsSetupWithoutABlock(t *testing.T) {
-	_, err := pipelineSteps(&manifest.Manifest{PostDeploy: []manifest.Step{{Run: "b"}}}, true)
-	if err == nil || !strings.Contains(err.Error(), "setup") {
-		t.Fatalf("error = %v, want a missing-setup-block error", err)
+// A setup run whose pulled manifest has no setup block runs post_deploy alone.
+// It cannot refuse: the tree is already synced by the time this is called, and a
+// tree that has moved must never end a run with nothing executed. The refusal
+// lives before the sync — see TestRunSetupWithoutASetupBlockDoesNotMoveTheTree.
+func TestPipelineStepsFallsBackToPostDeployWithoutASetupBlock(t *testing.T) {
+	steps, title := pipelineSteps(&manifest.Manifest{PostDeploy: []manifest.Step{{Run: "b"}}}, true)
+
+	if len(steps) != 1 || steps[0].Run != "b" {
+		t.Fatalf("steps = %#v, want post_deploy alone", steps)
+	}
+	if strings.Contains(title, "setup") {
+		t.Errorf("title = %q, want it to name only the block that really runs", title)
 	}
 }
 
@@ -1093,6 +1101,101 @@ func TestRunSetupNamesBothBlocksInItsProgressTitle(t *testing.T) {
 	}
 	if !strings.Contains(pipeline[0], "setup") {
 		t.Errorf("a setup run announced itself as %q, which names the wrong block", pipeline[0])
+	}
+}
+
+// TestRunSetupWithoutASetupBlockDoesNotMoveTheTree is the fleet guard. A setup
+// run is refused against the code already on disk, before git touches anything:
+// `repo setup` reaches every server registered on the repository at once, and
+// the overwhelmingly common mistake is a repository whose checked-out code has
+// no setup block at all. Checked only after the sync, every production checkout
+// on the fleet is fast-forwarded and `git clean -fd` deletes its untracked files
+// for a run that then executes nothing — a setup run does not roll back — while
+// the sender's terminal reports the request delivered.
+func TestRunSetupWithoutASetupBlockDoesNotMoveTheTree(t *testing.T) {
+	bare := origin(t, "repository: o/r\npost_deploy:\n  - echo post > marker\n")
+	dir := checkout(t, bare, "o/r")
+
+	before := git(t, dir, "rev-parse", "HEAD")
+
+	// Origin moves ahead, so a sync would fast-forward the checkout.
+	work := clone(t, bare)
+	if err := os.WriteFile(filepath.Join(work, "second"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+	git(t, work, "add", ".")
+	git(t, work, "commit", "-m", "second")
+	git(t, work, "push", "origin", "main")
+
+	// An untracked file `git clean -fd` would delete — the uploads and .env a
+	// live site keeps outside the repository.
+	if err := os.WriteFile(filepath.Join(dir, "untracked"), []byte("keep me"), 0o644); err != nil {
+		t.Fatalf("write untracked: %v", err)
+	}
+
+	o := opts(t, dir, "o/r", "")
+	o.Setup = true
+
+	res, err := Run(context.Background(), o)
+	if err == nil {
+		t.Fatal("Run: want an error")
+	}
+	if len(res.Paths) != 1 || res.Paths[0].Status != "failed" {
+		t.Fatalf("Paths = %+v, want one failed path", res.Paths)
+	}
+
+	if after := git(t, dir, "rev-parse", "HEAD"); after != before {
+		t.Errorf("HEAD = %s, want the checkout left on %s — a setup that cannot run must not move the tree first", after, before)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "untracked")); err != nil {
+		t.Errorf("git clean -fd ran for a setup that executed nothing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "marker")); err == nil {
+		t.Error("post_deploy ran for a setup that does not exist")
+	}
+}
+
+// TestRunSetupFallsBackToPostDeployWhenThePulledCodeHasNoSetup covers the other
+// half. The pulled manifest stays authoritative — the deploy steps version with
+// the code — so a setup block that exists on disk and not in the pulled commit
+// cannot run. But the tree has already moved by then, and ending there would
+// leave the checkout on a new commit with nothing built. post_deploy runs
+// instead, and the path still fails: what the operator asked for did not happen.
+func TestRunSetupFallsBackToPostDeployWhenThePulledCodeHasNoSetup(t *testing.T) {
+	bare := origin(t, "repository: o/r\nsetup:\n  - true\npost_deploy:\n  - echo post > marker\n")
+	dir := checkout(t, bare, "o/r")
+
+	before := git(t, dir, "rev-parse", "HEAD")
+
+	// The setup block is dropped upstream, so the pulled tree has none.
+	work := clone(t, bare)
+	if err := os.WriteFile(filepath.Join(work, ".rec-deploy.yml"),
+		[]byte("repository: o/r\npost_deploy:\n  - echo post > marker\n"), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	git(t, work, "commit", "-am", "drop setup")
+	git(t, work, "push", "origin", "main")
+
+	o := opts(t, dir, "o/r", "")
+	o.Setup = true
+
+	res, err := Run(context.Background(), o)
+	if err == nil {
+		t.Fatal("Run: want an error — the setup that was asked for did not run")
+	}
+	if len(res.Paths) != 1 || res.Paths[0].Status != "failed" {
+		t.Fatalf("Paths = %+v, want one failed path", res.Paths)
+	}
+	if after := git(t, dir, "rev-parse", "HEAD"); after == before {
+		t.Fatal("the tree did not move — this test is about a tree the sync already moved")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "marker")); err != nil {
+		t.Errorf("post_deploy did not run on a tree that had already moved: %v", err)
+	}
+
+	reason := res.Paths[0].Reason
+	if !strings.Contains(reason, "setup") || !strings.Contains(reason, "post_deploy") {
+		t.Errorf("Reason = %q, want it to name both the setup that did not run and the post_deploy that did", reason)
 	}
 }
 
