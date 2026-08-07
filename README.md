@@ -312,7 +312,7 @@ rollback_on_failure: true
 | `repository` | required | The `owner/repo` this checkout must belong to. Verified against `git remote get-url origin` before anything runs; a mismatch aborts that path. |
 | `setup` | `[]` | Steps run **before** `post_deploy`, only when a deploy is a setup run. Hold what is true exactly once — `key:generate`, `storage:link`, a seed. Anything every deploy needs belongs in `post_deploy`, where it is written once. |
 | `post_deploy` | `[]` | Steps run in order after a successful git sync. |
-| `rollback_on_failure` | `false` | On a failed step, reset the tree to the pre-deploy SHA and re-run the *previous* manifest's `post_deploy`. |
+| `rollback_on_failure` | `false` | On a failed step, reset the tree to the pre-deploy SHA and re-run the *previous* manifest's `post_deploy`. Never on a setup run, whatever this says: a failed setup leaves the tree exactly where it stopped. |
 
 `setup` runs before `post_deploy`, never instead of it. A setup run is `setup` then
 `post_deploy`, so the install commands every deploy shares stay in one place and cannot
@@ -394,6 +394,15 @@ on a live site it invalidates every session and everything encrypted with the ol
 dispatch meant for staging that also lands on production, with no way to say otherwise, is
 the sharpest edge this feature has.
 
+So in a terminal, `rec-deploy repo setup <owner/repo>` is two questions before anything is
+sent. *Where*: this server, or every server registered on the repository. Then, for the
+fleet, *which branch*: every branch, one of the branches this server's own checkouts sit
+on, or one typed by hand. Those local branches are not the fleet's answer — no server
+knows what the others hold — but they are the honest set to offer, and they beat typing a
+branch name blind into a command that reaches every machine. Passing `--branch` means the
+question is already answered and it is not asked again; piped, in CI or under systemd
+nothing is asked at all and the flags are the whole instruction.
+
 `rec-deploy repo setup` needs the binary and a GitHub token, nothing else — it reads no
 local state. The same request also works as a bare `gh api` call, from any machine with
 `gh` authenticated against the repository:
@@ -441,8 +450,14 @@ root on the server and that should be visible rather than discovered. If leaking
 metadata to a network observer is unacceptable, run with `--listen 127.0.0.1:9000` behind
 an nginx with TLS; no extra code is needed. Sending a `repository_dispatch` needs write
 access to the repository — the same access that already lets someone push a commit whose
-`post_deploy` runs arbitrary commands on the server, so the trigger grants no capability
-that did not exist.
+`post_deploy` runs arbitrary commands on the server, so on a repository without branch
+protection the trigger grants no capability that did not exist. Under branch protection it
+does grant one, and this is worth being precise about: protection rules and CODEOWNERS
+govern `git push`, not `POST /repos/{owner}/{repo}/dispatches`. A collaborator who cannot
+push to `main` can still ask every server in the fleet to re-run `setup` and `post_deploy`
+against their `main` checkouts. They cannot inject code that way — each tree is reset to
+the branch's existing HEAD — but they choose when those commands run, which is narrower
+than remote code execution and wider than nothing.
 
 ## Commands
 
