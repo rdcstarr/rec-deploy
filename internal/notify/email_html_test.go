@@ -126,6 +126,28 @@ func TestRenderHTMLNamesASetupRun(t *testing.T) {
 	}
 }
 
+// TestRenderHTMLDoesNotCallASetupRunAPush pins the card's first line, which
+// mirrors the command that triggered the run. A setup run reaches a server
+// through `repo install`, `repo deploy --setup` or a repository_dispatch sent
+// from a laptop — none of them a push, and none of them carrying a commit.
+func TestRenderHTMLDoesNotCallASetupRunAPush(t *testing.T) {
+	html, err := RenderHTML(Summary{
+		Repository: "rdcstarr/tema",
+		Status:     "success",
+		Pipeline:   "setup",
+	})
+	if err != nil {
+		t.Fatalf("RenderHTML: %v", err)
+	}
+
+	if strings.Contains(html, "$ push") {
+		t.Errorf("a setup run is rendered as a push:\n%s", html)
+	}
+	if !strings.Contains(html, "$ setup") {
+		t.Errorf("the card does not name the run it describes:\n%s", html)
+	}
+}
+
 // TestRenderHTMLNamesASetupRunWithABranch covers `repo setup <repo> --branch
 // <b>`, which sends a repository_dispatch that targets one branch of a fleet
 // — the push line's branch slot is occupied by a real branch, which must

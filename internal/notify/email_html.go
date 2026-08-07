@@ -24,7 +24,7 @@ const emailTemplate = `<!DOCTYPE html>
 <span style="font:11px ui-monospace,'Cascadia Mono',Consolas,'Liberation Mono',monospace;color:#6d7278;padding-left:12px">rec-deploy — webhook{{with .Host}} · {{.}}{{end}}</span>
 </td></tr>
 <tr><td style="padding:24px 26px 26px;font:13.5px/1.85 ui-monospace,'Cascadia Mono',Consolas,'Liberation Mono',monospace;color:#c9d1d9">
-<span style="color:#6d7278">$ push {{with .SHA7}}{{.}} {{end}}→ {{.Repository}}@{{.Branch}}</span><br>
+<span style="color:#6d7278">$ {{.Verb}} {{with .SHA7}}{{.}} {{end}}→ {{.Repository}}@{{.Branch}}</span><br>
 {{if .SHA7}}<span style="color:#58a6ff">›</span> commit <span style="color:#e0a63f">{{.SHA7}}</span>{{with .Author}} by {{.}}{{end}}<br>
 {{end}}{{with .MessageLine}}<span style="color:#58a6ff">›</span> <span style="color:#8b949e">{{.}}</span><br>
 {{end}}{{with .Error}}<span style="color:#f2635a">! {{.}}</span><br>
@@ -47,6 +47,7 @@ type emailView struct {
 	Subject      string
 	Repository   string
 	Branch       string
+	Verb         string // "push" | "setup" — what triggered the run, per Summary.Pipeline
 	SHA7         string
 	Author       string
 	MessageLine  string
@@ -85,6 +86,7 @@ func RenderHTML(s Summary) (string, error) {
 		Subject:     Subject(s),
 		Repository:  s.Repository,
 		Branch:      branchLabel(s),
+		Verb:        verb(s),
 		SHA7:        short(s.SHA),
 		Author:      s.Author,
 		MessageLine: firstLine(s.Message),
@@ -151,4 +153,17 @@ func RenderHTML(s Summary) (string, error) {
 	}
 
 	return b.String(), nil
+}
+
+// verb names, on the card's command line, what triggered the run. A setup run
+// arrives through `repo install`, `repo deploy --setup` or a
+// repository_dispatch sent from a laptop: none of them a push, and none of them
+// carrying the commit that line would otherwise show. It reads the same field
+// branchLabel and needsSetupNote do, so all three agree on what the run was.
+func verb(s Summary) string {
+	if s.Pipeline == "setup" {
+		return "setup"
+	}
+
+	return "push"
 }
