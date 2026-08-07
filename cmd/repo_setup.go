@@ -58,7 +58,7 @@ func newRepoSetupCmd() *cobra.Command {
 				return ui.ErrBack
 			}
 			if where == "local" {
-				return runDeploy(cmd.Context(), slug, "", true)
+				return runLocalSetup(cmd.Context(), slug)
 			}
 
 			// The fleet arm, and only it, then asks the branch: the dispatch
@@ -78,6 +78,63 @@ func newRepoSetupCmd() *cobra.Command {
 	cmd.Flags().StringVar(&branch, "branch", "", "only the checkouts on this branch")
 
 	return cmd
+}
+
+// runLocalSetup confirms, then runs the setup pipeline over this server's own
+// checkouts of slug.
+//
+// The fleet arm asks a branch and then confirms; this arm reached the engine
+// with neither, so a server holding staging on develop and production on main
+// ran the install steps on production from two menu picks. Setup steps are
+// frequently not idempotent — `php artisan key:generate` invalidates every
+// session and everything encrypted with the old key — so a local run is as
+// outward-facing as a dispatch and owes the same confirmation.
+//
+// It grows no branch flag of its own: `repo deploy <slug> --setup --path <p>`
+// already narrows to one checkout, and the confirmation says so.
+func runLocalSetup(ctx context.Context, slug string) error {
+	found := localCheckouts(ctx, slug)
+
+	// A cancelled scan is the operator leaving, not discovery coming up empty —
+	// the same distinction chooseSetupBranch draws, for the same reason.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	ok, err := ui.Confirm("Run setup for "+slug+" on this server?", describeLocalSetup(found, slug))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		// Declining is a back-out, not a completed run.
+		return ui.ErrBack
+	}
+
+	return runDeploy(ctx, slug, "", true)
+}
+
+// describeLocalSetup lists the checkouts a local setup run will reach, each with
+// the branch it is on, for the confirmation prompt — a bare "this server" hides
+// that production is one of them.
+//
+// Discovery is an offer in this command, never a requirement, so a scan that
+// answers nothing still has to describe the run rather than draw an empty
+// prompt: the engine discovers again for itself, and finding nothing there is
+// its own reported error.
+func describeLocalSetup(found []discover.Installation, slug string) string {
+	var b strings.Builder
+	for _, in := range found {
+		b.WriteString("\n  " + in.Path)
+		if in.Branch != "" {
+			b.WriteString(" (" + in.Branch + ")")
+		}
+	}
+	if b.Len() == 0 {
+		b.WriteString("\n  every checkout of " + slug + " on this server")
+	}
+	b.WriteString("\n\nnarrow it to one with `rec-deploy repo deploy " + slug + " --setup --path <p>`")
+
+	return b.String()
 }
 
 // branchEvery and branchOther are the two answers of the branch chooser that

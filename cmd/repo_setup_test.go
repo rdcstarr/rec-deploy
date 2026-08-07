@@ -141,3 +141,38 @@ func TestRepoMenuOffersSetup(t *testing.T) {
 	}
 	t.Error("the repo hub does not offer setup")
 }
+
+// TestDescribeLocalSetupNamesEveryCheckoutAndItsBranch pins what the local arm
+// owes before it runs. "This server" reached the engine with no branch question
+// and no confirmation, so a box holding staging on develop and production on
+// main ran the setup steps on production from two menu picks. The confirmation
+// has to show which trees it will hit and the branch each is on — and point at
+// the flag that narrows further, since the local arm deliberately grows no
+// branch plumbing of its own.
+func TestDescribeLocalSetupNamesEveryCheckoutAndItsBranch(t *testing.T) {
+	got := describeLocalSetup([]discover.Installation{
+		{Path: "/var/www/prod", Branch: "main"},
+		{Path: "/var/www/staging", Branch: "develop"},
+	}, "o/r")
+
+	for _, want := range []string{"/var/www/prod", "main", "/var/www/staging", "develop"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("describeLocalSetup = %q, want it to name %q", got, want)
+		}
+	}
+	if !strings.Contains(got, "--path") {
+		t.Errorf("describeLocalSetup = %q, want the escape hatch that narrows further", got)
+	}
+}
+
+// Discovery is an offer in this command, never a requirement — see
+// TestLocalCheckoutsDegradesWhenDiscoveryAnswersNothing. A scan that answers
+// nothing must still produce a confirmation that says what will run, rather than
+// an empty prompt that reads as "nothing will happen".
+func TestDescribeLocalSetupStaysHonestWithNoCheckouts(t *testing.T) {
+	got := describeLocalSetup(nil, "o/r")
+
+	if !strings.Contains(got, "o/r") || !strings.Contains(got, "this server") {
+		t.Errorf("describeLocalSetup(nil) = %q, want it to still say what the run covers", got)
+	}
+}
