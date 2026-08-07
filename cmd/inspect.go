@@ -531,6 +531,12 @@ func listLogs(ctx context.Context, slug string, limit int) error {
 // deployRow renders one deploy of the history: when it ran, against what it did.
 func deployRow(d store.Deploy, repository string) [2]string {
 	flags := []string{d.Status}
+	// A setup run ran the manifest's install steps on top of the ordinary
+	// pipeline. The history has to say so: it is the difference between a
+	// routine push and an install, and nothing else in the row shows it.
+	if d.Pipeline == store.PipelineSetup {
+		flags = append(flags, "setup")
+	}
 	if repository != "" {
 		flags = append(flags, repository)
 	}
@@ -557,6 +563,7 @@ func deployJSON(d store.Deploy, repository string) map[string]any {
 		"id":         d.ID,
 		"repository": repository,
 		"status":     d.Status,
+		"pipeline":   d.Pipeline,
 		"ref":        d.Ref,
 		"sha":        d.SHA,
 		"message":    d.Message,
@@ -846,6 +853,9 @@ func pathLogBody(d store.Deploy, p store.DeployPath, repository string) string {
 	b.WriteString(ui.KeyValueLine("repository", repository) + "\n")
 	b.WriteString(ui.KeyValueLine("when", d.StartedAt.Format(time.DateTime)) + "\n")
 	b.WriteString(ui.KeyValueLine("status", p.Status) + "\n")
+	if d.Pipeline == store.PipelineSetup {
+		b.WriteString(ui.KeyValueLine("pipeline", "setup — the manifest's setup steps ran before post_deploy") + "\n")
+	}
 	b.WriteString(ui.KeyValueLine("user", strings.Join(userFlags(p), "  ")) + "\n")
 	if p.NewSHA != "" {
 		b.WriteString(ui.KeyValueLine("commit", shortSHA(p.PreviousSHA)+" → "+shortSHA(p.NewSHA)) + "\n")

@@ -454,3 +454,41 @@ func TestDeployRow(t *testing.T) {
 		t.Errorf("row %q spills the commit body over several lines", row[1])
 	}
 }
+
+func TestDeployRowMarksASetupRun(t *testing.T) {
+	setup := deployRow(store.Deploy{Status: "success", Pipeline: store.PipelineSetup}, "o/r")
+	if !strings.Contains(setup[1], "setup") {
+		t.Errorf("row = %q, want it to name the setup run", setup[1])
+	}
+
+	plain := deployRow(store.Deploy{Status: "success", Pipeline: store.PipelinePostDeploy}, "o/r")
+	if strings.Contains(plain[1], "setup") {
+		t.Errorf("row = %q, want no setup marker on an ordinary deploy", plain[1])
+	}
+}
+
+func TestDeployJSONCarriesThePipeline(t *testing.T) {
+	got := deployJSON(store.Deploy{Status: "success", Pipeline: store.PipelineSetup}, "o/r")
+	if got["pipeline"] != store.PipelineSetup {
+		t.Errorf("pipeline = %v, want %q", got["pipeline"], store.PipelineSetup)
+	}
+
+	plain := deployJSON(store.Deploy{Status: "success", Pipeline: store.PipelinePostDeploy}, "o/r")
+	if plain["pipeline"] != store.PipelinePostDeploy {
+		t.Errorf("pipeline = %v, want %q", plain["pipeline"], store.PipelinePostDeploy)
+	}
+}
+
+func TestPathLogBodyMarksASetupRun(t *testing.T) {
+	d := store.Deploy{Status: "success", Pipeline: store.PipelineSetup}
+	p := store.DeployPath{Path: "/var/www/site", User: "andrei", Status: "success"}
+
+	if !strings.Contains(pathLogBody(d, p, "o/r"), "setup") {
+		t.Error("the path log does not say the run was a setup run")
+	}
+
+	d.Pipeline = store.PipelinePostDeploy
+	if strings.Contains(pathLogBody(d, p, "o/r"), "setup") {
+		t.Error("the path log marks an ordinary deploy as a setup run")
+	}
+}
