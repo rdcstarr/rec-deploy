@@ -408,3 +408,42 @@ func TestLastDeployPerPathInExcludesRowsWithNoNewSHA(t *testing.T) {
 		t.Fatalf("got %+v, want the moved row (new_sha P) — the newer empty-sha row must be excluded", got)
 	}
 }
+
+func TestDeployRecordsItsPipeline(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+
+	repoID, err := s.RepoInsert(ctx, Repo{Repository: "o/r", Token: "tok", Secret: "s"})
+	if err != nil {
+		t.Fatalf("RepoInsert: %v", err)
+	}
+
+	id, err := s.DeployStart(ctx, Deploy{
+		RepoID: repoID, Status: StatusRunning, Pipeline: PipelineSetup,
+	})
+	if err != nil {
+		t.Fatalf("DeployStart: %v", err)
+	}
+
+	got, err := s.DeployByID(ctx, id)
+	if err != nil {
+		t.Fatalf("DeployByID: %v", err)
+	}
+	if got.Pipeline != PipelineSetup {
+		t.Errorf("Pipeline = %q, want %q", got.Pipeline, PipelineSetup)
+	}
+
+	// An unset pipeline is an ordinary deploy: that is what every row written by
+	// an older binary holds, and it must read back as post_deploy.
+	plain, err := s.DeployStart(ctx, Deploy{RepoID: repoID, Status: StatusRunning})
+	if err != nil {
+		t.Fatalf("DeployStart: %v", err)
+	}
+	back, err := s.DeployByID(ctx, plain)
+	if err != nil {
+		t.Fatalf("DeployByID: %v", err)
+	}
+	if back.Pipeline != PipelinePostDeploy {
+		t.Errorf("Pipeline = %q, want %q", back.Pipeline, PipelinePostDeploy)
+	}
+}

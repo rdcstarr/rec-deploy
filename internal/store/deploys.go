@@ -24,6 +24,12 @@ const (
 	StatusInterrupted = "interrupted"
 )
 
+// The manifest block a deploy ran.
+const (
+	PipelinePostDeploy = "post_deploy"
+	PipelineSetup      = "setup"
+)
+
 // ErrDuplicateDelivery reports that this X-GitHub-Delivery has already been
 // handled. The webhook answers 200 and does no work: a replayed signed request
 // must not re-deploy.
@@ -39,6 +45,7 @@ type Deploy struct {
 	Message    string
 	Author     string
 	Status     string
+	Pipeline   string // "setup" or "post_deploy"; empty is stored as post_deploy
 	StartedAt  time.Time
 	FinishedAt time.Time
 }
@@ -68,9 +75,16 @@ func (s *Store) DeployStart(ctx context.Context, d Deploy) (int64, error) {
 		delivery = d.DeliveryID
 	}
 
+	// An unset pipeline is an ordinary deploy. Defaulting here rather than at
+	// every call site keeps the column's contract in one place.
+	pipeline := d.Pipeline
+	if pipeline == "" {
+		pipeline = PipelinePostDeploy
+	}
+
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO deploys (repo_id, delivery_id, ref, sha, message, author, status) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		d.RepoID, delivery, d.Ref, d.SHA, d.Message, d.Author, d.Status)
+		`INSERT INTO deploys (repo_id, delivery_id, ref, sha, message, author, status, pipeline) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.RepoID, delivery, d.Ref, d.SHA, d.Message, d.Author, d.Status, pipeline)
 	if err != nil {
 		// deploys_delivery_id is the only unique index this statement can trip.
 		var serr *sqlite.Error
@@ -116,7 +130,7 @@ func (s *Store) Deploys(ctx context.Context, repository string, limit int) ([]De
 	}
 
 	query := `SELECT d.id, d.repo_id, COALESCE(d.delivery_id, ''), d.ref, d.sha, d.message, d.author,
-	                 d.status, d.started_at, COALESCE(d.finished_at, '')
+	                 d.status, d.pipeline, d.started_at, COALESCE(d.finished_at, '')
 	          FROM deploys d JOIN repos r ON r.id = d.repo_id`
 	args := []any{}
 	if repository != "" {
@@ -137,7 +151,7 @@ func (s *Store) Deploys(ctx context.Context, repository string, limit int) ([]De
 		var d Deploy
 		var started, finished string
 		if err := rows.Scan(&d.ID, &d.RepoID, &d.DeliveryID, &d.Ref, &d.SHA, &d.Message, &d.Author,
-			&d.Status, &started, &finished); err != nil {
+			&d.Status, &d.Pipeline, &started, &finished); err != nil {
 			return nil, err
 		}
 		// A running deploy has no finish time; the zero Time is how callers see that.
@@ -156,10 +170,10 @@ func (s *Store) DeployByID(ctx context.Context, id int64) (Deploy, error) {
 	var started, finished string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, repo_id, COALESCE(delivery_id, ''), ref, sha, message, author,
-		        status, started_at, COALESCE(finished_at, '')
+		        status, pipeline, started_at, COALESCE(finished_at, '')
 		 FROM deploys WHERE id = ?`, id).Scan(
 		&d.ID, &d.RepoID, &d.DeliveryID, &d.Ref, &d.SHA, &d.Message, &d.Author,
-		&d.Status, &started, &finished)
+		&d.Status, &d.Pipeline, &started, &finished)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Deploy{}, ErrNotFound
 	}
