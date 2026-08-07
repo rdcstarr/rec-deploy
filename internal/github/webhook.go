@@ -100,3 +100,46 @@ func ParsePush(body []byte) (PushEvent, error) {
 
 	return ev, nil
 }
+
+// DispatchSetup is the event_type rec-deploy answers on a repository_dispatch.
+// It is namespaced deliberately: a repository that already uses dispatches for
+// its own CI must not trip a deploy.
+const DispatchSetup = "rec-deploy-setup"
+
+// DispatchEvent is what rec-deploy keeps from a repository_dispatch: the custom
+// event name, the optional branch it was narrowed to, and who sent it. A
+// dispatch carries no commit, so there is no ref, sha or message to keep.
+type DispatchEvent struct {
+	Action     string
+	Branch     string
+	Sender     string
+	Repository string
+}
+
+// ParseDispatch extracts the fields rec-deploy keeps from a repository_dispatch
+// payload. GitHub puts the sender's event_type in `action`.
+func ParseDispatch(body []byte) (DispatchEvent, error) {
+	var payload struct {
+		Action        string `json:"action"`
+		ClientPayload struct {
+			Branch string `json:"branch"`
+		} `json:"client_payload"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+		Sender struct {
+			Login string `json:"login"`
+		} `json:"sender"`
+	}
+
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return DispatchEvent{}, fmt.Errorf("parse repository_dispatch payload: %w", err)
+	}
+
+	return DispatchEvent{
+		Action:     payload.Action,
+		Branch:     payload.ClientPayload.Branch,
+		Sender:     payload.Sender.Login,
+		Repository: payload.Repository.FullName,
+	}, nil
+}

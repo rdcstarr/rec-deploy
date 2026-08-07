@@ -75,7 +75,7 @@ func isDots(s string) bool { return strings.Trim(s, ".") == "" }
 func (c *Client) UpdateHook(ctx context.Context, repo string, id int64, url, secret string) error {
 	in := map[string]any{
 		"active": true,
-		"events": []string{"push"},
+		"events": []string{"push", "repository_dispatch"},
 		"config": map[string]any{
 			"url":          url,
 			"content_type": "json",

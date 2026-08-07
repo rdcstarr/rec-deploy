@@ -77,3 +77,29 @@ func TestMissingScopes(t *testing.T) {
 		t.Errorf("MissingScopes = %v, want [admin:repo_hook] — named exactly", got)
 	}
 }
+
+func TestParseDispatch(t *testing.T) {
+	body := []byte(`{"action":"rec-deploy-setup","client_payload":{"branch":"develop"},
+	                 "repository":{"full_name":"rdcstarr/tema"},"sender":{"login":"rdcstarr"}}`)
+
+	ev, err := ParseDispatch(body)
+	if err != nil {
+		t.Fatalf("ParseDispatch: %v", err)
+	}
+	if ev.Action != DispatchSetup {
+		t.Errorf("Action = %q, want %q", ev.Action, DispatchSetup)
+	}
+	if ev.Branch != "develop" || ev.Sender != "rdcstarr" || ev.Repository != "rdcstarr/tema" {
+		t.Errorf("event = %#v", ev)
+	}
+}
+
+func TestParseDispatchWithoutAClientPayload(t *testing.T) {
+	ev, err := ParseDispatch([]byte(`{"action":"rec-deploy-setup","repository":{"full_name":"rdcstarr/tema"},"sender":{"login":"rdcstarr"}}`))
+	if err != nil {
+		t.Fatalf("ParseDispatch: %v", err)
+	}
+	if ev.Branch != "" {
+		t.Errorf("Branch = %q, want empty", ev.Branch)
+	}
+}

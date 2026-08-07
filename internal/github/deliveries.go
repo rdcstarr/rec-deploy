@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -57,12 +58,25 @@ func (c *Client) PingHook(ctx context.Context, repo string, hookID int64) error 
 type Hook struct {
 	URL    string
 	Active bool
+	// ID is GitHub's id for the hook. Only the listing sets it: Client.Hook is
+	// asked for one by id already.
+	ID int64
+	// Events are the event names GitHub delivers to this hook.
+	Events []string
+}
+
+// Delivers reports whether GitHub sends event to this hook. A hook registered
+// before rec-deploy subscribed to repository_dispatch delivers pushes and
+// nothing else, so `repo setup` would never reach the server behind it.
+func (h Hook) Delivers(event string) bool {
+	return slices.Contains(h.Events, event)
 }
 
 // Hook reads one webhook's own record of itself.
 func (c *Client) Hook(ctx context.Context, repo string, hookID int64) (Hook, error) {
 	var out struct {
-		Active bool `json:"active"`
+		Active bool     `json:"active"`
+		Events []string `json:"events"`
 		Config struct {
 			URL string `json:"url"`
 		} `json:"config"`
@@ -72,5 +86,5 @@ func (c *Client) Hook(ctx context.Context, repo string, hookID int64) (Hook, err
 		return Hook{}, fmt.Errorf("github: read webhook %d of %s: %w", hookID, repo, err)
 	}
 
-	return Hook{URL: out.Config.URL, Active: out.Active}, nil
+	return Hook{URL: out.Config.URL, Active: out.Active, Events: out.Events}, nil
 }

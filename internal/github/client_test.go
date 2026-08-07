@@ -42,7 +42,7 @@ func TestAddDeployKeyIsReadOnly(t *testing.T) {
 	}
 }
 
-func TestCreateHookSendsSecretAndPushOnly(t *testing.T) {
+func TestCreateHookSendsSecretAndBothEvents(t *testing.T) {
 	var got map[string]any
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,13 +64,92 @@ func TestCreateHookSendsSecretAndPushOnly(t *testing.T) {
 	}
 
 	events, _ := got["events"].([]any)
-	if len(events) != 1 || events[0] != "push" {
-		t.Errorf("events = %v, want [push]", events)
+	if len(events) != 2 || events[0] != "push" || events[1] != "repository_dispatch" {
+		t.Errorf("events = %v, want [push repository_dispatch]", events)
 	}
 
 	cfg, _ := got["config"].(map[string]any)
 	if cfg["secret"] != "s3cret" || cfg["url"] != "http://1.2.3.4:9000/hook/abc" || cfg["content_type"] != "json" {
 		t.Errorf("config = %v", cfg)
+	}
+}
+
+func TestDispatchSendsTheEventTypeAndBranch(t *testing.T) {
+	var got map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/rdcstarr/tema/dispatches" || r.Method != http.MethodPost {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := New("tok")
+	c.BaseURL = srv.URL
+
+	if err := c.Dispatch(context.Background(), "rdcstarr/tema", DispatchSetup, "develop"); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if got["event_type"] != DispatchSetup {
+		t.Errorf("event_type = %v", got["event_type"])
+	}
+	payload, _ := got["client_payload"].(map[string]any)
+	if payload["branch"] != "develop" {
+		t.Errorf("client_payload = %v", payload)
+	}
+}
+
+func TestDispatchWithoutABranchSendsNoClientPayload(t *testing.T) {
+	var got map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := New("tok")
+	c.BaseURL = srv.URL
+
+	if err := c.Dispatch(context.Background(), "rdcstarr/tema", DispatchSetup, ""); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if _, ok := got["client_payload"]; ok {
+		t.Errorf("client_payload = %v, want it absent", got["client_payload"])
+	}
+}
+
+func TestHooksReadsIDAndEvents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/rdcstarr/tema/hooks" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{{
+			"id":     77,
+			"active": true,
+			"events": []string{"push", "repository_dispatch"},
+			"config": map[string]any{"url": "http://1.2.3.4:9000/hook/abc"},
+		}})
+	}))
+	defer srv.Close()
+
+	c := New("tok")
+	c.BaseURL = srv.URL
+
+	hooks, err := c.Hooks(context.Background(), "rdcstarr/tema")
+	if err != nil {
+		t.Fatalf("Hooks: %v", err)
+	}
+	if len(hooks) != 1 || hooks[0].ID != 77 || !hooks[0].Active {
+		t.Fatalf("hooks = %#v", hooks)
+	}
+	if !hooks[0].Delivers("repository_dispatch") {
+		t.Errorf("events = %v, want repository_dispatch among them", hooks[0].Events)
+	}
+	if hooks[0].Delivers("issues") {
+		t.Error("Delivers(issues) = true")
 	}
 }
 
