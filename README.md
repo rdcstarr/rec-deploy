@@ -399,10 +399,14 @@ sent. *Where*: this server, or every server registered on the repository. Then, 
 fleet, *which branch*: every branch, one of the branches this server's own checkouts sit
 on, or one typed by hand. Those local branches are not the fleet's answer — no server
 knows what the others hold — but they are the honest set to offer, and they beat typing a
-branch name blind into a command that reaches every machine. Passing `--branch` answers
-both questions at once — the request goes to every server, on that branch, with nothing
-asked; piped, in CI or under systemd nothing is asked at all and the flags are the whole
-instruction.
+branch name blind into a command that reaches every machine. Choosing *this server*
+confirms first, listing the checkouts it will reach and the branch each is on;
+`rec-deploy repo deploy <owner/repo> --setup --path <p>` narrows it to one.
+
+`--branch` and `--yes` each answer both questions at once and send the dispatch with
+nothing asked: `--branch` to the checkouts on that branch, `--yes` to every branch. That
+is what makes the command usable over `ssh -t`, which is how it is meant to be run. Piped,
+in CI or under systemd nothing is asked at all and the flags are the whole instruction.
 
 `rec-deploy repo setup` needs the binary and a GitHub token, nothing else — no store, no
 registered repository. Where this server holds checkouts of its own, the branch question

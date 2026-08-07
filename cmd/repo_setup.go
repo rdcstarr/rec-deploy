@@ -26,7 +26,8 @@ func newRepoSetupCmd() *cobra.Command {
 		Long: "setup sends GitHub a repository_dispatch, which GitHub delivers to every server registered on the repository — " +
 			"so the setup block runs without an SSH session anywhere. It needs no store and no registered repository: " +
 			"a GitHub token with write access is the whole requirement, which is what lets it run from a laptop. " +
-			"In a terminal, with no --branch given, it first asks whether to run here instead, then which branch the request should reach — the triggers differ by blast radius and a setup step is rarely safe to repeat, so nothing is guessed on the operator's behalf.",
+			"In a terminal it first asks whether to run here instead, then which branch the request should reach — the triggers differ by blast radius and a setup step is rarely safe to repeat, so nothing is guessed on the operator's behalf. " +
+			"--branch and --yes each answer both questions outright and send the dispatch with nothing asked: --branch to the checkouts on that branch, --yes to every branch.",
 		Args: cobra.MaximumNArgs(1),
 		Example: "rec-deploy repo setup rdcstarr/tema-mea\n" +
 			"rec-deploy repo setup rdcstarr/tema-mea --branch develop",
@@ -39,10 +40,7 @@ func newRepoSetupCmd() *cobra.Command {
 				return cmd.Help()
 			}
 
-			// A flag names the scope outright. Without one, in a terminal, ask:
-			// the two triggers differ by blast radius, which is not a default to
-			// guess at on the operator's behalf.
-			if !isInteractive() || cmd.Flags().Changed("branch") {
+			if scopeAnswered(isInteractive(), flagYes, cmd.Flags().Changed("branch")) {
 				return requestSetup(cmd.Context(), slug, branch)
 			}
 
@@ -78,6 +76,20 @@ func newRepoSetupCmd() *cobra.Command {
 	cmd.Flags().StringVar(&branch, "branch", "", "only the checkouts on this branch")
 
 	return cmd
+}
+
+// scopeAnswered reports whether `repo setup` already knows what to do without
+// opening the scope menu. Outside a terminal there is nobody to ask. --branch
+// names the fleet arm and the branch it targets. --yes says "do not ask me",
+// and the only thing that can mean here is this command's documented purpose —
+// the fleet dispatch, every branch: without it, `ssh -t host 'rec-deploy repo
+// setup o/r --yes'` opens a menu and blocks, and there is no way at all to run
+// unattended over a tty the command whose whole point is running from a laptop.
+//
+// With none of the three, a terminal is asked: the two triggers differ by blast
+// radius, and that is not a default to guess at on the operator's behalf.
+func scopeAnswered(interactive, yes, branchSet bool) bool {
+	return !interactive || yes || branchSet
 }
 
 // runLocalSetup confirms, then runs the setup pipeline over this server's own

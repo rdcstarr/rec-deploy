@@ -192,3 +192,29 @@ func TestServerCountSaysWhenTheListingWasCutShort(t *testing.T) {
 		t.Errorf("serverCount(full page) = %q, want it to read as a floor", got)
 	}
 }
+
+// TestScopeAnsweredTreatsYesAsTheFleetDispatch is the fix for a command
+// documented as running from a laptop and unusable that way over a TTY.
+// `ssh -t host 'rec-deploy repo setup o/r --yes'` opened the scope menu and
+// blocked: there was no way at all to say "every branch, every server, don't
+// ask".
+func TestScopeAnsweredTreatsYesAsTheFleetDispatch(t *testing.T) {
+	if !scopeAnswered(true, true, false) {
+		t.Error("--yes in a terminal still opens the scope menu — there is no way to run this command unattended over a tty")
+	}
+	if !scopeAnswered(true, false, true) {
+		t.Error("--branch names the fleet arm and its branch, so nothing is left to ask")
+	}
+	if !scopeAnswered(false, false, false) {
+		t.Error("outside a terminal there is nobody to ask")
+	}
+	if scopeAnswered(true, false, false) {
+		t.Error("a bare interactive run must still ask: the two triggers differ by blast radius")
+	}
+}
+
+func TestSetupCmdLongDocumentsYes(t *testing.T) {
+	if !strings.Contains(newRepoSetupCmd().Long, "--yes") {
+		t.Error("Long does not say that --yes answers the scope question")
+	}
+}
