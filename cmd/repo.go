@@ -748,7 +748,9 @@ func installRepo(ctx context.Context, slug, path string) error {
 			if err := clearDirectoryContents(path); err != nil {
 				return err
 			}
-			ui.Success("cleared " + path)
+			if !flagJSON {
+				ui.Success("cleared " + path)
+			}
 			ownerDir = path
 		} else {
 			return err
@@ -838,11 +840,18 @@ func installRepo(ctx context.Context, slug, path string) error {
 		})
 	}
 
-	ui.Success("cloned " + slug + " into " + path + " as " + owner.Username)
-	if uid == 0 {
-		ui.Warn("⚠ root: this checkout is root-owned, so push access to " + slug + " is root on this server")
+	// --json reserves stdout for one document: the clone report above when there
+	// is no manifest, or the deploy result runDeploy prints when there is one.
+	// The root-owned flag is not lost by the silence — it travels as RanAsRoot on
+	// every path of that result.
+	if !flagJSON {
+		ui.Success("cloned " + slug + " into " + path + " as " + owner.Username)
+		if uid == 0 {
+			ui.Warn("⚠ root: this checkout is root-owned, so push access to " + slug + " is root on this server")
+		}
 	}
 	if !hasManifest {
+		// Only reachable without --json: the branch above already returned.
 		ui.Info("commit a .rec-deploy.yml or .rec-deploy.yaml to the repository, then check `rec-deploy repo scan` picks the checkout up")
 		return nil
 	}
@@ -856,9 +865,12 @@ func installRepo(ctx context.Context, slug, path string) error {
 	}
 
 	setup := len(m.Setup) > 0
-	if setup {
+	switch {
+	case flagJSON:
+		// The deploy result below is this run's document.
+	case setup:
 		ui.Info("manifest found — running setup, then post_deploy")
-	} else {
+	default:
 		ui.Info("manifest found — running post_deploy")
 	}
 

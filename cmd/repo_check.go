@@ -266,7 +266,11 @@ func repairHook(ctx context.Context, client *github.Client, repo store.Repo, wan
 		return err
 	}
 
-	ui.Success("github's copy of the webhook now matches this server")
+	// --json reserves stdout for the document, and this runs from inside that
+	// branch too: the repair is reported there as "repaired": true.
+	if !flagJSON {
+		ui.Success("github's copy of the webhook now matches this server")
+	}
 
 	return nil
 }

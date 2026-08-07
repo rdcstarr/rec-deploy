@@ -1,11 +1,47 @@
 package cmd
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/rdcstarr/rec-deploy/internal/github"
+	"github.com/rdcstarr/rec-deploy/internal/store"
 )
+
+// TestRepairHookWritesNoProseOnStdoutForJSON pins the global contract: with
+// --json, stdout is one document and nothing else. repairHook runs from inside
+// checkRepo's --json branch, so a receipt line printed here lands above the
+// document and `rec-deploy repo check o/r --repair --json | jq` fails to parse
+// what is otherwise a successful repair.
+func TestRepairHookWritesNoProseOnStdoutForJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	client := github.New("tok")
+	client.BaseURL = srv.URL
+
+	json, yes := flagJSON, flagYes
+	flagJSON, flagYes = true, true
+	defer func() { flagJSON, flagYes = json, yes }()
+
+	var err error
+	out := capture(t, func() {
+		err = repairHook(context.Background(), client,
+			store.Repo{Repository: "o/r", GitHubHookID: 7, Secret: "s3cret"},
+			"http://1.2.3.4:9000/hook/tok", []string{"the webhook is deactivated on github"})
+	})
+	if err != nil {
+		t.Fatalf("repairHook: %v", err)
+	}
+	if out != "" {
+		t.Errorf("repairHook wrote %q to stdout, which --json reserves for the document", out)
+	}
+}
 
 func TestHookDrift(t *testing.T) {
 	const want = "http://1.2.3.4:9000/hook/abc"
