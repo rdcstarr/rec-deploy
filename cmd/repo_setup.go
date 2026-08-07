@@ -24,7 +24,7 @@ func newRepoSetupCmd() *cobra.Command {
 		Use:   "setup <owner/repo>",
 		Short: "Ask every server registered on a repository to run its setup pipeline",
 		Long: "setup sends GitHub a repository_dispatch, which GitHub delivers to every server registered on the repository — " +
-			"so the setup block runs without an SSH session anywhere. It reads no local state and needs no registered repository: " +
+			"so the setup block runs without an SSH session anywhere. It needs no store and no registered repository: " +
 			"a GitHub token with write access is the whole requirement, which is what lets it run from a laptop. " +
 			"In a terminal, with no --branch given, it first asks whether to run here instead, then which branch the request should reach — the triggers differ by blast radius and a setup step is rarely safe to repeat, so nothing is guessed on the operator's behalf.",
 		Args: cobra.MaximumNArgs(1),
@@ -98,9 +98,21 @@ const (
 // session and everything encrypted with the old key. An operator who is offered
 // no way to narrow is offered only the destructive option.
 func chooseSetupBranch(ctx context.Context, slug string) (string, error) {
+	local := localCheckouts(ctx, slug)
+
+	// A cancelled scan is the operator leaving, not discovery coming up empty.
+	// localCheckouts cannot tell the two apart — by design, since every other
+	// failure is only an offer it could not make — so Ctrl+C during the scan
+	// would otherwise draw this chooser over the interrupt and need a second one
+	// to escape. Surfacing the error is what every other caller of a cancelled
+	// scan already does.
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	// selectMenu, like the scope question above it: both are navigation screens
 	// of the same flow, so h shows the command's help on either.
-	choice, err := selectMenu("Which branch should run setup?", setupBranchOptions(localCheckouts(ctx, slug)))
+	choice, err := selectMenu("Which branch should run setup?", setupBranchOptions(local))
 	if err != nil {
 		return "", err // ui.ErrBack (re-show the hub) or ui.ErrQuit (quit)
 	}
@@ -134,7 +146,7 @@ func chooseSetupBranch(ctx context.Context, slug string) (string, error) {
 // others hold — but they are the honest set to offer, and they beat typing a
 // branch name blind into a command that reaches every machine. The hand-typed
 // entry is what keeps this usable where discovery answers nothing, which is
-// every laptop: `repo setup` reads no local state by design, and a chooser that
+// every laptop: `repo setup` requires no local state by design, and a chooser that
 // could only offer "every branch" there would put the operator back on the one
 // option this exists to stop being mandatory.
 func setupBranchOptions(found []discover.Installation) []ui.Option {
@@ -157,9 +169,9 @@ func setupBranchOptions(found []discover.Installation) []ui.Option {
 
 // localCheckouts returns this server's own checkouts of slug, and none when
 // discovery cannot answer. Discovery is an offer here, never a requirement:
-// `repo setup` reads no local state and needs no registered repository — that
-// is what lets it run from a laptop — so a scan that finds nothing, or fails
-// outright, narrows what can be offered instead of ending the command.
+// `repo setup` needs no store and no registered repository — that is what lets
+// it run from a laptop — so a scan that finds nothing, or fails outright,
+// narrows what can be offered instead of ending the command.
 func localCheckouts(ctx context.Context, slug string) []discover.Installation {
 	found, err := scanInstallations(ctx)
 	if err != nil {
