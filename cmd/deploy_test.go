@@ -276,3 +276,43 @@ func TestDeployCmdHasASetupFlag(t *testing.T) {
 		t.Errorf("--setup usage = %q", f.Usage)
 	}
 }
+
+// TestFailedAfterMovingNamesTheRunsThatNeedRecovery is the hint the report owes.
+// A path that failed after its tree had already moved is left on the new commit
+// — deliberately un-rolled-back on a setup run — and `rec-deploy logs` alone
+// tells the operator what broke, not how to get the site back. Its row carries a
+// usable rollback target, so `repo rollback` recovers it; nothing said so.
+func TestFailedAfterMovingNamesTheRunsThatNeedRecovery(t *testing.T) {
+	moved := deploy.Result{Paths: []deploy.PathResult{
+		{Path: "/srv/a", Status: store.StatusFailed, PreviousSHA: "aaaaaaa", NewSHA: "bbbbbbb"},
+	}}
+	if !failedAfterMoving(moved) {
+		t.Error("a failure that left the tree on a new commit offers no recovery hint")
+	}
+
+	// A failure before the sync — the pre-sync setup guard, a lock it could not
+	// take — left nothing to undo, and pointing at rollback there would send the
+	// operator to reset a tree this run never touched.
+	untouched := deploy.Result{Paths: []deploy.PathResult{
+		{Path: "/srv/a", Status: store.StatusFailed, PreviousSHA: "aaaaaaa"},
+	}}
+	if failedAfterMoving(untouched) {
+		t.Error("a failure that never moved the tree offers a rollback that would undo nothing")
+	}
+
+	// A rolled-back path is already back on its previous commit.
+	rolled := deploy.Result{Paths: []deploy.PathResult{
+		{Path: "/srv/a", Status: store.StatusRolledBack, PreviousSHA: "aaaaaaa", NewSHA: "aaaaaaa"},
+	}}
+	if failedAfterMoving(rolled) {
+		t.Error("a rolled-back path still asks to be rolled back")
+	}
+
+	// A success moved its tree on purpose.
+	ok := deploy.Result{Paths: []deploy.PathResult{
+		{Path: "/srv/a", Status: store.StatusSuccess, PreviousSHA: "aaaaaaa", NewSHA: "bbbbbbb"},
+	}}
+	if failedAfterMoving(ok) {
+		t.Error("a successful deploy is offered a rollback")
+	}
+}

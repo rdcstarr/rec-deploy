@@ -328,6 +328,31 @@ func renderResult(res deploy.Result) {
 	if failed {
 		ui.Info("`rec-deploy logs` shows the full output of the command that failed")
 	}
+	if failedAfterMoving(res) {
+		ui.Info("those checkouts are left on the new commit — `rec-deploy repo rollback " + res.Repository + "` puts them back")
+	}
+}
+
+// failedAfterMoving reports whether any path failed after the sync had already
+// moved its tree. Such a checkout is left on the new commit — a setup run is
+// never rolled back, and rollback_on_failure is off by default — so the site is
+// serving code whose pipeline did not finish, and the run's own row carries the
+// commit it came from. `repo rollback` recovers it; without this the report says
+// only where to read the failure, never how to undo it.
+//
+// A path that failed before the sync is deliberately excluded: nothing moved
+// there, and a rollback would reset a tree this run never touched.
+func failedAfterMoving(res deploy.Result) bool {
+	for _, pr := range res.Paths {
+		if pr.Status == store.StatusSuccess || pr.Status == store.StatusSkipped {
+			continue
+		}
+		if pr.NewSHA != "" && pr.NewSHA != pr.PreviousSHA {
+			return true
+		}
+	}
+
+	return false
 }
 
 // resultFlags describes one checkout's outcome: its status when that is not
