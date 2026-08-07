@@ -43,9 +43,17 @@ type PathSummary struct {
 	RanAsRoot bool
 }
 
-// Subject is the one-line headline: repository, branch, outcome.
+// Subject is the one-line headline: repository, branch, outcome. A setup run
+// that targeted one branch of a fleet (`repo setup <repo> --branch <b>`) says
+// so in the "rec-deploy" prefix, since branchLabel's slot is busy with the
+// real branch there — see needsSetupNote.
 func Subject(s Summary) string {
-	return fmt.Sprintf("rec-deploy: %s@%s %s", s.Repository, branchLabel(s), s.Status)
+	prefix := "rec-deploy"
+	if needsSetupNote(s) {
+		prefix += " setup"
+	}
+
+	return fmt.Sprintf("%s: %s@%s %s", prefix, s.Repository, branchLabel(s), s.Status)
 }
 
 // branchLabel is what every renderer shows where the pushed branch would
@@ -65,6 +73,18 @@ func branchLabel(s Summary) string {
 	}
 
 	return ""
+}
+
+// needsSetupNote reports whether a setup run needs its own "setup" marker
+// outside the branch slot. branchLabel already answers for a refless setup
+// run — repo@setup, in the exact spot a routine push would name its branch —
+// but `repo setup <repo> --branch <b>` sends a repository_dispatch that
+// targets one branch of a fleet, and that branch is real information the
+// slot must keep. A setup run has to read as one whatever its ref, so when
+// there is a real branch to show, every renderer marks the run's own
+// title/verdict word instead of crowding the branch it must not replace.
+func needsSetupNote(s Summary) bool {
+	return s.Pipeline == "setup" && strings.TrimPrefix(s.Ref, "refs/heads/") != ""
 }
 
 // Render builds the plain-text body every channel sends.

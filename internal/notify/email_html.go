@@ -55,7 +55,7 @@ type emailView struct {
 	Host         string
 	VerdictGlyph string // "✓" | "!" | "›"
 	VerdictColor string // green | red | amber
-	VerdictWord  string // "deployed" | "failed" | the raw status
+	VerdictWord  string // "deployed" | "failed" | the raw status, "setup " prefixed per needsSetupNote
 	JournalHint  bool   // only on failure
 	Failed       bool   // failure livery: border + chrome colors
 	Tail         string
@@ -102,6 +102,11 @@ func RenderHTML(s Summary) (string, error) {
 		v.Failed = true
 	default: // "skipped", "test", anything neutral — no failure livery
 		v.VerdictGlyph, v.VerdictColor, v.VerdictWord = "›", "#e0a63f", s.Status
+	}
+	if needsSetupNote(s) {
+		// Branch is showing the real branch this setup run targeted, so the
+		// verdict line carries the marker instead — see needsSetupNote.
+		v.VerdictWord = "setup " + v.VerdictWord
 	}
 	if v.Failed {
 		v.Border, v.ChromeBG = "#3a2724", "#1a1416"

@@ -129,6 +129,27 @@ func TestRenderTelegramHTMLNamesASetupRun(t *testing.T) {
 	}
 }
 
+// TestRenderTelegramHTMLNamesASetupRunWithABranch covers `repo setup <repo>
+// --branch <b>`, which sends a repository_dispatch that targets one branch of
+// a fleet — the code line's branch slot is occupied by a real branch, which
+// must survive untouched, so the bold title carries the marker instead.
+func TestRenderTelegramHTMLNamesASetupRunWithABranch(t *testing.T) {
+	html := RenderTelegramHTML(Summary{
+		Repository: "repo",
+		Ref:        "refs/heads/main",
+		Author:     "rdcstarr",
+		Status:     "success",
+		Pipeline:   "setup",
+	})
+
+	if !strings.Contains(html, "<code>repo@main</code>") {
+		t.Errorf("branched setup run lost the real branch:\n%s", html)
+	}
+	if !strings.Contains(html, "<b>✅ setup deployed</b>") {
+		t.Errorf("branched setup run does not name itself in the title:\n%s", html)
+	}
+}
+
 // TestRenderTelegramHTMLOmitsPreWhenNoPaths checks a Summary with no paths
 // (e.g. the notify test probe) renders no empty <pre> block.
 func TestRenderTelegramHTMLOmitsPreWhenNoPaths(t *testing.T) {

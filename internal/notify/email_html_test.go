@@ -126,6 +126,29 @@ func TestRenderHTMLNamesASetupRun(t *testing.T) {
 	}
 }
 
+// TestRenderHTMLNamesASetupRunWithABranch covers `repo setup <repo> --branch
+// <b>`, which sends a repository_dispatch that targets one branch of a fleet
+// — the push line's branch slot is occupied by a real branch, which must
+// survive untouched, so the verdict line carries the marker instead.
+func TestRenderHTMLNamesASetupRunWithABranch(t *testing.T) {
+	html, err := RenderHTML(Summary{
+		Repository: "rdcstarr/tema",
+		Ref:        "refs/heads/main",
+		Status:     "success",
+		Pipeline:   "setup",
+	})
+	if err != nil {
+		t.Fatalf("RenderHTML: %v", err)
+	}
+
+	if !strings.Contains(html, "→ rdcstarr/tema@main") {
+		t.Errorf("branched setup run lost the real branch:\n%s", html)
+	}
+	if !strings.Contains(html, `color:#39d47f;font-weight:bold">✓ setup deployed</span>`) {
+		t.Errorf("branched setup run does not name itself in the verdict line:\n%s", html)
+	}
+}
+
 // TestRenderHTMLNeutralStatuses checks that outcomes which are neither success
 // nor failure — a skipped deploy (branch filter) or the try-it notification
 // from `rec-deploy init` — get the amber "›" verdict and never borrow the

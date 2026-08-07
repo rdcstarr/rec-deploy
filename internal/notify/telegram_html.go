@@ -52,6 +52,11 @@ func telegramPathGlyph(status string) string {
 // card's own tags and glyphs are Go constants, never interpolated.
 func RenderTelegramHTML(s Summary) string {
 	glyph, word := telegramVerdict(s.Status)
+	if needsSetupNote(s) {
+		// branchLabel is showing the real branch this setup run targeted, so
+		// the bold title carries the marker instead — see needsSetupNote.
+		word = "setup " + word
+	}
 
 	var b strings.Builder
 	b.WriteString("<b>" + glyph + " " + esc(word) + "</b>\n")

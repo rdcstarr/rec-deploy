@@ -79,10 +79,11 @@ func TestSubject(t *testing.T) {
 }
 
 // TestSummaryNamesASetupRun pins why this field exists: an install that ran
-// unattended across a fleet (a repository_dispatch, which carries no ref)
-// must not render identically to a routine push. The plain body is what
-// journald logs and what Telegram falls back to, so this is the floor every
-// channel has to clear.
+// unattended across a fleet (repo install, `repo deploy --setup`, or a
+// repository_dispatch sent to no particular branch — all refless) must not
+// render identically to a routine push. The plain body is what journald logs
+// and what Telegram falls back to, so this is the floor every channel has to
+// clear.
 func TestSummaryNamesASetupRun(t *testing.T) {
 	sum := Summary{
 		Repository: "rdcstarr/tema",
@@ -94,6 +95,22 @@ func TestSummaryNamesASetupRun(t *testing.T) {
 	got := Render(sum)
 	if !strings.Contains(strings.ToLower(got), "setup") {
 		t.Errorf("a setup run rendered as an ordinary deploy:\n%s", got)
+	}
+}
+
+// TestSubjectNamesASetupRunWithABranch covers the other trigger shape:
+// `repo setup <repo> --branch <b>` sends a repository_dispatch that targets
+// one branch of a fleet, so this run carries a real ref. The branch slot has
+// to keep it — see branchLabel — so the marker must show up somewhere else,
+// and the run must still not read as an ordinary deploy.
+func TestSubjectNamesASetupRunWithABranch(t *testing.T) {
+	got := Subject(Summary{Repository: "rdcstarr/tema", Ref: "refs/heads/main", Status: "success", Pipeline: "setup"})
+
+	if !strings.Contains(got, "rdcstarr/tema@main") {
+		t.Errorf("Subject = %q, lost the real branch", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "setup") {
+		t.Errorf("Subject = %q, a branched setup run rendered as an ordinary deploy", got)
 	}
 }
 
