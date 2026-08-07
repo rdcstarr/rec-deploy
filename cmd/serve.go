@@ -17,7 +17,6 @@ import (
 	"github.com/rdcstarr/rec-deploy/internal/cli"
 	"github.com/rdcstarr/rec-deploy/internal/config"
 	"github.com/rdcstarr/rec-deploy/internal/deploy"
-	"github.com/rdcstarr/rec-deploy/internal/github"
 	"github.com/rdcstarr/rec-deploy/internal/mcpserver"
 	"github.com/rdcstarr/rec-deploy/internal/notify"
 	"github.com/rdcstarr/rec-deploy/internal/server"
@@ -108,14 +107,15 @@ func newServeCmd() *cobra.Command {
 			opts := server.Options{
 				Config: cfg,
 				Store:  st,
-				Deploy: func(ctx context.Context, repo store.Repo, deployID int64, ev github.PushEvent) {
+				Deploy: func(ctx context.Context, t server.Trigger) {
 					fcfg := reload()
-					deployAndRecord(ctx, st, fcfg, deployID, deploy.Options{
-						Repository: repo.Repository,
-						Ref:        ev.Ref,
-						SHA:        ev.SHA,
-						Message:    ev.Message,
-						Author:     ev.Author,
+					deployAndRecord(ctx, st, fcfg, t.DeployID, deploy.Options{
+						Repository: t.Repo.Repository,
+						Ref:        t.Ref,
+						SHA:        t.SHA,
+						Message:    t.Message,
+						Author:     t.Author,
+						Setup:      t.Setup,
 						Roots:      fcfg.Discovery.Roots,
 						Prune:      fcfg.Discovery.Prune,
 						KeysDir:    keysDir,

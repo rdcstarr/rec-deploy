@@ -37,6 +37,19 @@ const deployTimeout = 2 * time.Hour
 // is cancelled, and reports the cancellation like any other failure.
 const drainTimeout = 15 * time.Minute
 
+// Trigger is what one accepted delivery asks the daemon to deploy. A push fills
+// every field from the commit it carries; a repository_dispatch carries no
+// commit, so it names only who asked and, when it was narrowed, the branch.
+type Trigger struct {
+	Repo     store.Repo
+	DeployID int64
+
+	Ref, SHA, Message, Author string
+
+	// Setup runs the manifest's setup block before post_deploy.
+	Setup bool
+}
+
 // Options configures the handler.
 type Options struct {
 	// Config is the loaded configuration.
@@ -52,7 +65,7 @@ type Options struct {
 	// records on ctx itself would find its database writes cancelled too,
 	// leaving the row `running` forever: the very zombie row Drain exists to
 	// prevent.
-	Deploy func(ctx context.Context, repo store.Repo, deployID int64, ev github.PushEvent)
+	Deploy func(ctx context.Context, t Trigger)
 }
 
 // Server is the webhook receiver together with the deploys it has in flight.
@@ -177,27 +190,53 @@ func hook(w http.ResponseWriter, r *http.Request, s *Server) {
 		return
 	}
 
+	var trigger Trigger
+
 	switch event := r.Header.Get(github.EventHeader); event {
 	case "ping":
 		w.WriteHeader(http.StatusOK)
 		return
 	case "push":
+		ev, err := github.ParsePush(body)
+		if err != nil {
+			http.Error(w, "bad payload", http.StatusBadRequest)
+			return
+		}
+		if ev.Branch() == "" || ev.SHA == "" {
+			// A tag push or a branch deletion: there is nothing to deploy, and a
+			// tag must never re-deploy whatever branch happens to be checked out.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		trigger = Trigger{Ref: ev.Ref, SHA: ev.SHA, Message: ev.Message, Author: ev.Author}
+	case "repository_dispatch":
+		ev, err := github.ParseDispatch(body)
+		if err != nil {
+			http.Error(w, "bad payload", http.StatusBadRequest)
+			return
+		}
+		if ev.Action != github.DispatchSetup {
+			// Someone else's dispatch. Subscribing to the event must not hand the
+			// deploy trigger to whatever else this repository uses them for.
+			slog.Debug("ignoring dispatch", "repository", repo.Repository, "action", ev.Action)
+			w.WriteHeader(http.StatusNoContent)
+
+			return
+		}
+
+		// No commit to record: a dispatch says "run setup", not "deploy this
+		// sha". The sender's login is the honest answer to who asked. A branch,
+		// when given, becomes the ref, and the engine's existing branch filter
+		// skips every checkout sitting on another one.
+		trigger = Trigger{Author: ev.Sender, Setup: true}
+		if ev.Branch != "" {
+			trigger.Ref = "refs/heads/" + ev.Branch
+		}
 	default:
 		slog.Debug("ignoring event", "repository", repo.Repository, "event", event)
 		w.WriteHeader(http.StatusNoContent)
 
-		return
-	}
-
-	ev, err := github.ParsePush(body)
-	if err != nil {
-		http.Error(w, "bad payload", http.StatusBadRequest)
-		return
-	}
-	if ev.Branch() == "" || ev.SHA == "" {
-		// A tag push or a branch deletion: there is nothing to deploy, and a tag
-		// must never re-deploy whatever branch happens to be checked out.
-		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
@@ -244,13 +283,19 @@ func hook(w http.ResponseWriter, r *http.Request, s *Server) {
 	// while waiting for mu — it does its database work outside the lock and takes
 	// mu only afterwards, to decrement inflight — so this insert can never wait on
 	// the connection behind a goroutine that is itself waiting on mu.
+	pipeline := store.PipelinePostDeploy
+	if trigger.Setup {
+		pipeline = store.PipelineSetup
+	}
+
 	deployID, err := s.opts.Store.DeployStart(ctx, store.Deploy{
 		RepoID:     repo.ID,
 		DeliveryID: delivery,
-		Ref:        ev.Ref,
-		SHA:        ev.SHA,
-		Message:    ev.Message,
-		Author:     ev.Author,
+		Ref:        trigger.Ref,
+		SHA:        trigger.SHA,
+		Message:    trigger.Message,
+		Author:     trigger.Author,
+		Pipeline:   pipeline,
 		Status:     store.StatusRunning,
 	})
 	if errors.Is(err, store.ErrDuplicateDelivery) {
@@ -286,6 +331,9 @@ func hook(w http.ResponseWriter, r *http.Request, s *Server) {
 	// takes minutes.
 	w.WriteHeader(http.StatusOK)
 
+	trigger.Repo = repo
+	trigger.DeployID = deployID
+
 	go func() {
 		defer func() {
 			s.mu.Lock()
@@ -297,7 +345,7 @@ func hook(w http.ResponseWriter, r *http.Request, s *Server) {
 			cancel()
 		}()
 
-		s.opts.Deploy(bg, repo, deployID, ev)
+		s.opts.Deploy(bg, trigger)
 	}()
 }
 
