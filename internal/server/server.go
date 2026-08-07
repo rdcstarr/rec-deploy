@@ -164,8 +164,9 @@ func (s *Server) Drain(ctx context.Context) {
 }
 
 // hook implements the receive contract: unknown token 404, bad signature 401,
-// ping 200, any other event 204, a repeated delivery 200 with no work, and a
-// push acknowledged immediately and deployed on a goroutine.
+// ping 200, any other event or dispatch action 204, a repeated delivery 200
+// with no work, and a push or a rec-deploy-setup dispatch acknowledged
+// immediately and deployed on a goroutine.
 func hook(w http.ResponseWriter, r *http.Request, s *Server) {
 	ctx := r.Context()
 
