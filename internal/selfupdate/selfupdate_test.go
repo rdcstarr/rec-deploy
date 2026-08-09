@@ -6,12 +6,14 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -439,6 +441,166 @@ func TestSuperviseRestartSucceedsOnAHealthyRestart(t *testing.T) {
 	}
 	if !got.Restarted {
 		t.Error("Restarted = false, want true — the daemon was restarted and waitHealthy confirmed it stayed up")
+	}
+}
+
+// TestSuperviseRestartBringsCompanionsOntoTheNewBinary: rec-deploy-mcp.service
+// runs the same binary as the daemon, so an update that restarts only
+// rec-deploy.service leaves the MCP origin on the previous release for good —
+// nothing else ever restarts it. The order is the assertion: the companion goes
+// last, after the daemon cleared its health check, so a release that cannot keep
+// rec-deploy.service up never reaches the companion at all.
+func TestSuperviseRestartBringsCompanionsOntoTheNewBinary(t *testing.T) {
+	var order []string
+	swapSeams(t,
+		func(_ context.Context, unit string) error { order = append(order, unit); return nil },
+		func(context.Context, string) bool { return true }, // daemon and companion both running
+	)
+
+	opts := RestartOptions{
+		Unit:       "rec-deploy.service",
+		Companions: []string{"rec-deploy-mcp.service"},
+		BackupPath: filepath.Join(t.TempDir(), "rec-deploy.prev"),
+		Wait:       50 * time.Millisecond,
+	}
+	res := Result{Current: "v1.0.0", Latest: "v1.1.0", Updated: true}
+
+	got, err := superviseRestart(context.Background(), res, filepath.Join(t.TempDir(), "rec-deploy"), opts, time.Millisecond)
+	if err != nil {
+		t.Fatalf("superviseRestart with a running companion = %v, want nil", err)
+	}
+	if !got.Restarted {
+		t.Error("Restarted = false, want true")
+	}
+
+	want := []string{"rec-deploy.service", "rec-deploy-mcp.service"}
+	if !slices.Equal(order, want) {
+		t.Errorf("restarted %v, want %v — the companion comes after the daemon proved healthy", order, want)
+	}
+	if !slices.Equal(got.RestartedCompanions, []string{"rec-deploy-mcp.service"}) {
+		t.Errorf("RestartedCompanions = %v, want [rec-deploy-mcp.service] — the caller's summary is the only place this is reported",
+			got.RestartedCompanions)
+	}
+}
+
+// TestSuperviseRestartLeavesAStoppedCompanionAlone: a companion is asked whether
+// it is running before it is restarted. try-restart alone would not do: it exits
+// 5 on a unit that does not exist, and the MCP units are absent on every box that
+// never enabled them — which would log a failure on every timer tick, forever. A
+// companion the operator stopped stays stopped, exactly like the daemon itself.
+func TestSuperviseRestartLeavesAStoppedCompanionAlone(t *testing.T) {
+	var order []string
+	swapSeams(t,
+		func(_ context.Context, unit string) error { order = append(order, unit); return nil },
+		func(_ context.Context, unit string) bool { return unit == "rec-deploy.service" },
+	)
+
+	opts := RestartOptions{
+		Unit:       "rec-deploy.service",
+		Companions: []string{"rec-deploy-mcp.service"},
+		BackupPath: filepath.Join(t.TempDir(), "rec-deploy.prev"),
+		Wait:       50 * time.Millisecond,
+	}
+	res := Result{Current: "v1.0.0", Latest: "v1.1.0", Updated: true}
+
+	got, err := superviseRestart(context.Background(), res, filepath.Join(t.TempDir(), "rec-deploy"), opts, time.Millisecond)
+	if err != nil {
+		t.Fatalf("superviseRestart with a stopped companion = %v, want nil", err)
+	}
+	if !got.Restarted {
+		t.Error("Restarted = false, want true — the daemon itself was running and came back")
+	}
+
+	want := []string{"rec-deploy.service"}
+	if !slices.Equal(order, want) {
+		t.Errorf("restarted %v, want %v — a companion that is not running must be left alone", order, want)
+	}
+	if len(got.RestartedCompanions) != 0 {
+		t.Errorf("RestartedCompanions = %v, want none — nothing was restarted, so nothing may be claimed", got.RestartedCompanions)
+	}
+}
+
+// TestSuperviseRestartSkipsCompanionsOnRollback: a release that could not keep the
+// daemon up is restored, so the binary on disk is the previous one again — the
+// code the companion is already running. Restarting it there would drop its
+// connections to land it exactly where it started.
+func TestSuperviseRestartSkipsCompanionsOnRollback(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "rec-deploy")
+	kept := filepath.Join(dir, "rec-deploy.prev")
+	if err := os.WriteFile(exe, []byte("the broken release\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kept, []byte("the previous binary\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var order []string
+	var calls int
+	swapSeams(t,
+		func(_ context.Context, unit string) error { order = append(order, unit); return nil },
+		func(context.Context, string) bool { calls++; return calls == 1 }, // active for the pre-check, dead ever after
+	)
+
+	opts := RestartOptions{
+		Unit:       "rec-deploy.service",
+		Companions: []string{"rec-deploy-mcp.service"},
+		BackupPath: kept,
+		Wait:       30 * time.Millisecond,
+	}
+	res := Result{Current: "v1.0.0", Latest: "v1.1.0", Updated: true}
+
+	got, err := superviseRestart(context.Background(), res, exe, opts, time.Millisecond)
+	if err == nil {
+		t.Fatal("superviseRestart on an unhealthy release = nil error, want a rollback error")
+	}
+	if !got.RolledBack {
+		t.Error("RolledBack = false, want true")
+	}
+
+	want := []string{"rec-deploy.service", "rec-deploy.service"} // restart onto new, then recovery onto old
+	if !slices.Equal(order, want) {
+		t.Errorf("restarted %v, want %v — a rollback must not touch the companion", order, want)
+	}
+}
+
+// TestSuperviseRestartSurvivesACompanionThatWillNotRestart: the daemon is healthy
+// on the new release, so the update succeeded and must be reported as such. A
+// companion that refuses to come back is a warning in the journal — never a
+// reason to roll back a release the daemon itself is happy on.
+func TestSuperviseRestartSurvivesACompanionThatWillNotRestart(t *testing.T) {
+	swapSeams(t,
+		func(_ context.Context, unit string) error {
+			if unit == "rec-deploy-mcp.service" {
+				return errors.New("Job for rec-deploy-mcp.service failed")
+			}
+
+			return nil
+		},
+		func(context.Context, string) bool { return true },
+	)
+
+	opts := RestartOptions{
+		Unit:       "rec-deploy.service",
+		Companions: []string{"rec-deploy-mcp.service"},
+		BackupPath: filepath.Join(t.TempDir(), "rec-deploy.prev"),
+		Wait:       50 * time.Millisecond,
+	}
+	res := Result{Current: "v1.0.0", Latest: "v1.1.0", Updated: true}
+
+	got, err := superviseRestart(context.Background(), res, filepath.Join(t.TempDir(), "rec-deploy"), opts, time.Millisecond)
+	if err != nil {
+		t.Fatalf("superviseRestart = %v, want nil — a failed companion must not fail a healthy update", err)
+	}
+	if !got.Restarted {
+		t.Error("Restarted = false, want true")
+	}
+	if got.RolledBack {
+		t.Error("RolledBack = true, want false — the daemon stayed up, so the release is good")
+	}
+	if len(got.RestartedCompanions) != 0 {
+		t.Errorf("RestartedCompanions = %v, want none — a companion that would not restart must not be reported as restarted",
+			got.RestartedCompanions)
 	}
 }
 

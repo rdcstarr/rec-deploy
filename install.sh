@@ -218,6 +218,17 @@ main() {
 		fi
 	fi
 
+	# The MCP origin is a second long-lived process on the same binary, run as its
+	# own unit by the cloudflare mode. Nothing else ever restarts it, so it would
+	# answer from the previous release until the box reboots.
+	if [ "$have_systemd" -eq 1 ] && systemctl is-active --quiet rec-deploy-mcp; then
+		if systemctl restart rec-deploy-mcp; then
+			ok "restarted the MCP origin on the new binary"
+		else
+			warn "could not restart the MCP origin — it answers from the previous release until:  systemctl restart rec-deploy-mcp"
+		fi
+	fi
+
 	# The payoff: drop straight into the wizard. Piped installs have the script on
 	# stdin, so the wizard reads from the controlling terminal instead. Opening
 	# /dev/tty is the gate: the node exists even without a controlling terminal

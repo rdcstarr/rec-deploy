@@ -68,6 +68,14 @@ nfpms:
       - deb
       - rpm
     bindir: /usr/bin
+
+    # A package upgrade replaces the binary and nothing else — the running daemon
+    # keeps its own image, so without this it serves the previous release until
+    # someone restarts it. The script try-restarts, so a stopped unit stays
+    # stopped and a first install is a no-op.
+    scripts:
+      postinstall: packaging/postinstall.sh
+
     contents:
       # Not type: config. A local edit belongs in a drop-in —
       # /etc/systemd/system/rec-deploy.service.d/override.conf — which is

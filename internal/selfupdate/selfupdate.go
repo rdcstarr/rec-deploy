@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -64,6 +65,13 @@ type Result struct {
 	// skipped (the unit was already stopped) and on every rollback, where the new
 	// release never stayed up and the previous binary was restored instead.
 	Restarted bool `json:"restarted"`
+
+	// RestartedCompanions names the units from RestartOptions.Companions that were
+	// running and were brought onto the new binary too. It exists because the
+	// caller's summary is the only place an operator learns what an unattended
+	// update touched: the journal is logged at Warn for every command but the
+	// daemon, so a restart reported only there is reported nowhere.
+	RestartedCompanions []string `json:"restarted_companions,omitempty"`
 }
 
 // asset is one file attached to a GitHub release.
@@ -529,6 +537,15 @@ var (
 type RestartOptions struct {
 	// Unit is the daemon's systemd unit, e.g. "rec-deploy.service".
 	Unit string
+	// Companions are the other units running this same binary — the MCP origin,
+	// rec-deploy-mcp.service — which keep serving the previous release until they
+	// are restarted too. Nothing else ever restarts them: self-update replaces the
+	// file on disk, and a long-lived process holds its own image until it execs
+	// again, so a companion left alone here stays on that release for good.
+	//
+	// They are brought back only after Unit has proven healthy, and only if they
+	// are running. See restartCompanions for why both conditions are load-bearing.
+	Companions []string
 	// BackupPath is where the outgoing binary is kept for a rollback.
 	BackupPath string
 	// Wait bounds how long the unit has to come back healthy. It must comfortably
@@ -610,12 +627,48 @@ func superviseRestart(ctx context.Context, res Result, exe string, opts RestartO
 	active := func(c context.Context) bool { return unitActive(c, opts.Unit) }
 	if waitHealthy(ctx, active, opts.Wait, poll) {
 		res.Restarted = true
+		res.RestartedCompanions = restartCompanions(ctx, opts.Companions)
 
 		return res, nil
 	}
 
 	return rollback(ctx, res, exe, opts,
 		fmt.Errorf("%s did not stay up after updating to %s", opts.Unit, res.Latest))
+}
+
+// restartCompanions brings the other units running this binary onto the new one.
+// It is called only after the daemon itself cleared waitHealthy, which is what
+// makes it safe: a companion is never moved onto a release that could not keep
+// rec-deploy.service up, and a rollback — which restores the very code the
+// companion is still running — leaves it untouched.
+//
+// The is-active question is not redundant with try-restart's own "only if
+// running" rule. try-restart exits 5 on a unit that does not exist, and the MCP
+// units are absent on every box that never enabled them, so asking first is what
+// keeps a warning about a unit nobody installed out of the journal on every tick.
+//
+// A failure here is logged, never returned. The daemon is healthy on the new
+// release, so the update succeeded; rolling it back over a companion would take
+// a good release off the whole fleet for a secondary process. It returns the
+// units that did come back, for the caller's summary.
+func restartCompanions(ctx context.Context, units []string) []string {
+	var restarted []string
+	for _, unit := range units {
+		if !unitActive(ctx, unit) {
+			continue
+		}
+
+		if err := tryRestart(ctx, unit); err != nil {
+			slog.Warn("a unit sharing this binary would not restart — it keeps serving the previous release until you restart it",
+				"unit", unit, "error", err)
+
+			continue
+		}
+
+		restarted = append(restarted, unit)
+	}
+
+	return restarted
 }
 
 // rollback restores the kept binary and restarts the unit on it. The error it

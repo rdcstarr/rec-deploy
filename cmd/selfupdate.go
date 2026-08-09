@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -57,7 +58,7 @@ func newSelfUpdateCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&check, "check", false, "only check whether a newer release is available")
 	cmd.Flags().BoolVar(&restart, "restart", false,
-		"after updating, restart rec-deploy.service and roll back if it does not stay up (for rec-deploy-update.service)")
+		"after updating, restart rec-deploy.service — and any running unit sharing its binary — rolling back if the daemon does not stay up (for rec-deploy-update.service)")
 
 	return cmd
 }
@@ -157,6 +158,11 @@ func confirmRestart(ctx context.Context, current, latest string) (bool, error) {
 	}
 
 	detail := "The daemon is still running " + current + ". It is stopped and started on " + latest + ", and rolled back automatically if it does not stay up."
+	if systemd.IsActive(ctx, mcpService) {
+		// The confirm must name everything the answer restarts, or an operator
+		// approves one interruption and gets two.
+		detail += " " + mcpService + " runs the same binary and is restarted with it."
+	}
 	if running, err := runningDeployCount(ctx); err != nil {
 		// "cannot X; proceeding without Y" matches the pattern selfUpdateRestart
 		// uses for its own best-effort store reads a few lines below.
@@ -169,10 +175,11 @@ func confirmRestart(ctx context.Context, current, latest string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !ok {
-		ui.Info("restart it when convenient:  systemctl restart " + daemonUnit)
-	}
 
+	// A declined restart says nothing here on purpose: selfUpdateInstall runs next
+	// on exactly this answer and reports the stale daemon itself — after the
+	// install rather than before it, which is when it becomes true. Saying it in
+	// both places printed the hint twice for the one operator who read it.
 	return ok, nil
 }
 
@@ -247,6 +254,20 @@ func selfUpdateInstall(ctx context.Context, current string) error {
 	if res.Updated {
 		ui.Success(fmt.Sprintf("updated rec-deploy %s → %s", res.Current, res.Latest))
 		ui.Info("re-run rec-deploy to use the new version")
+
+		// The binary is new; the daemon is not. This is the only path that
+		// installs without touching the unit, and nothing else on it says so — a
+		// script, a CI runner or `--json` in a terminal never reaches the restart
+		// prompt, so without this the operator is told the update landed while
+		// webhooks keep being served by the release they just replaced.
+		//
+		// It names no version for the daemon: this binary is not necessarily the
+		// one the unit runs — an operator updating a copy in their own PATH would
+		// be told the daemon serves a release it never had.
+		if systemd.Available() && systemd.IsActive(ctx, daemonUnit) {
+			ui.Info(daemonUnit + " keeps serving the release it started on — restart it to pick up " + res.Latest +
+				":  systemctl restart " + daemonUnit)
+		}
 	} else {
 		ui.Success("rec-deploy is already up to date (" + res.Current + ")")
 	}
@@ -305,7 +326,12 @@ func selfUpdateRestart(ctx context.Context, current string) error {
 	}
 
 	res, err := selfupdate.ApplyAndRestart(ctx, current, selfupdate.RestartOptions{
-		Unit:       daemonUnit,
+		Unit: daemonUnit,
+		// The MCP origin is a second long-lived process on the same binary, and
+		// only the cloudflare mode runs it as its own unit — the local mode serves
+		// MCP from inside the daemon, so it comes back with it. Without this, a box
+		// on the cloudflare mode answers MCP from the pre-update release forever.
+		Companions: []string{mcpService},
 		BackupPath: filepath.Join(stateDir, "rec-deploy.prev"),
 		Wait:       30 * time.Second,
 	})
@@ -387,7 +413,12 @@ func selfUpdateRestart(ctx context.Context, current string) error {
 		return ui.PrintJSON(res)
 	}
 
-	ui.Success(fmt.Sprintf("updated rec-deploy %s → %s and restarted %s", res.Current, res.Latest, daemonUnit))
+	// Name every unit that came back, not only the daemon: on a box running the
+	// MCP origin as its own unit the update bounced that too, and this line — in
+	// the journal, under the timer — is where the operator learns it. A
+	// slog.Info there would not do: every command but the daemon logs at Warn.
+	restarted := strings.Join(append([]string{daemonUnit}, res.RestartedCompanions...), ", ")
+	ui.Success(fmt.Sprintf("updated rec-deploy %s → %s and restarted %s", res.Current, res.Latest, restarted))
 
 	return nil
 }
