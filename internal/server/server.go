@@ -14,7 +14,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -38,17 +37,18 @@ const deployTimeout = 2 * time.Hour
 // is cancelled, and reports the cancellation like any other failure.
 const drainTimeout = 15 * time.Minute
 
-// Trigger is what one accepted delivery asks the daemon to deploy. A push fills
-// every field from the commit it carries; a repository_dispatch carries no
-// commit, so it names only who asked and, when it was narrowed, the branch.
+// Trigger is what one accepted delivery asks the daemon to deploy, filled from
+// the commit the push carries.
+//
+// The daemon runs post_deploy and never the manifest's setup block: a push is
+// not a request to re-run install steps that are frequently not idempotent. The
+// setup pipeline is an operator action on the server — `rec-deploy repo setup`
+// or `repo deploy --setup` — where it can be confirmed.
 type Trigger struct {
 	Repo     store.Repo
 	DeployID int64
 
 	Ref, SHA, Message, Author string
-
-	// Setup runs the manifest's setup block before post_deploy.
-	Setup bool
 }
 
 // Options configures the handler.
@@ -164,28 +164,9 @@ func (s *Server) Drain(ctx context.Context) {
 	<-done
 }
 
-// ignoredDispatchLevel picks the level an ignored repository_dispatch is logged
-// at. A repository's own unrelated dispatches are routine — someone else's CI
-// fires them all day — and belong at Debug, where they cost nothing.
-//
-// An action that carries rec-deploy's own prefix and still does not match is a
-// different thing: a typo in a request aimed at this server. The README
-// advertises a bare `gh api … -f event_type=rec-deploy-setup`, and a mistyped
-// one is answered 204 by every server registered on the repository. At Debug,
-// with serve running at Info, that leaves no journal line anywhere and the
-// operator has a successful request, no deploy, and nothing to look at.
-func ignoredDispatchLevel(action string) slog.Level {
-	if strings.HasPrefix(action, "rec-deploy") {
-		return slog.LevelInfo
-	}
-
-	return slog.LevelDebug
-}
-
 // hook implements the receive contract: unknown token 404, bad signature 401,
-// ping 200, any other event or dispatch action 204, a repeated delivery 200
-// with no work, and a push or a rec-deploy-setup dispatch acknowledged
-// immediately and deployed on a goroutine.
+// ping 200, any other event 204, a repeated delivery 200 with no work, and a
+// push acknowledged immediately and deployed on a goroutine.
 func hook(w http.ResponseWriter, r *http.Request, s *Server) {
 	ctx := r.Context()
 
@@ -230,29 +211,6 @@ func hook(w http.ResponseWriter, r *http.Request, s *Server) {
 		}
 
 		trigger = Trigger{Ref: ev.Ref, SHA: ev.SHA, Message: ev.Message, Author: ev.Author}
-	case "repository_dispatch":
-		ev, err := github.ParseDispatch(body)
-		if err != nil {
-			http.Error(w, "bad payload", http.StatusBadRequest)
-			return
-		}
-		if ev.Action != github.DispatchSetup {
-			// Someone else's dispatch. Subscribing to the event must not hand the
-			// deploy trigger to whatever else this repository uses them for.
-			slog.Log(ctx, ignoredDispatchLevel(ev.Action), "ignoring dispatch", "repository", repo.Repository, "action", ev.Action)
-			w.WriteHeader(http.StatusNoContent)
-
-			return
-		}
-
-		// No commit to record: a dispatch says "run setup", not "deploy this
-		// sha". The sender's login is the honest answer to who asked. A branch,
-		// when given, becomes the ref, and the engine's existing branch filter
-		// skips every checkout sitting on another one.
-		trigger = Trigger{Author: ev.Sender, Setup: true}
-		if ev.Branch != "" {
-			trigger.Ref = "refs/heads/" + ev.Branch
-		}
 	default:
 		slog.Debug("ignoring event", "repository", repo.Repository, "event", event)
 		w.WriteHeader(http.StatusNoContent)
@@ -303,11 +261,6 @@ func hook(w http.ResponseWriter, r *http.Request, s *Server) {
 	// while waiting for mu — it does its database work outside the lock and takes
 	// mu only afterwards, to decrement inflight — so this insert can never wait on
 	// the connection behind a goroutine that is itself waiting on mu.
-	pipeline := store.PipelinePostDeploy
-	if trigger.Setup {
-		pipeline = store.PipelineSetup
-	}
-
 	deployID, err := s.opts.Store.DeployStart(ctx, store.Deploy{
 		RepoID:     repo.ID,
 		DeliveryID: delivery,
@@ -315,7 +268,7 @@ func hook(w http.ResponseWriter, r *http.Request, s *Server) {
 		SHA:        trigger.SHA,
 		Message:    trigger.Message,
 		Author:     trigger.Author,
-		Pipeline:   pipeline,
+		Pipeline:   store.PipelinePostDeploy,
 		Status:     store.StatusRunning,
 	})
 	if errors.Is(err, store.ErrDuplicateDelivery) {

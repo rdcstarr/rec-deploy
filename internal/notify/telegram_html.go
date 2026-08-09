@@ -52,11 +52,6 @@ func telegramPathGlyph(status string) string {
 // card's own tags and glyphs are Go constants, never interpolated.
 func RenderTelegramHTML(s Summary) string {
 	glyph, word := telegramVerdict(s.Status)
-	if needsSetupNote(s) {
-		// branchLabel is showing the real branch this setup run targeted, so
-		// the bold title carries the marker instead — see needsSetupNote.
-		word = "setup " + word
-	}
 
 	var b strings.Builder
 	b.WriteString("<b>" + glyph + " " + esc(word) + "</b>\n")
@@ -72,11 +67,6 @@ func RenderTelegramHTML(s Summary) string {
 			b.WriteString(" by " + esc(s.Author))
 		}
 		b.WriteString("\n")
-	} else if s.Author != "" {
-		// A dispatch carries no commit, and its author is the login of whoever
-		// sent it — see Render. It takes the commit line's slot, in the same
-		// inline <code> the sha would have used, so the card keeps its shape.
-		b.WriteString("requested by <code>" + esc(s.Author) + "</code>\n")
 	}
 	if s.Message != "" {
 		b.WriteString("<i>" + esc(firstLine(s.Message)) + "</i>\n")

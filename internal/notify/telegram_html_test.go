@@ -18,8 +18,11 @@ func TestRenderTelegramHTMLEscapesPushControlledInput(t *testing.T) {
 		Repository: "o/r",
 		Ref:        "refs/heads/main",
 		Status:     "failed",
-		Message:    "<script>x</script>",
-		Author:     "a<i>b",
+		// The sha is load-bearing: the author renders beside it, so without one
+		// this test would assert the escaping of a value the card never prints.
+		SHA:     "abc1234",
+		Message: "<script>x</script>",
+		Author:  "a<i>b",
 		Paths: []PathSummary{
 			{Path: "/srv/<b>x</b>", User: "u", Status: "failed", Reason: "<script>evil</script>"},
 		},
@@ -112,10 +115,9 @@ func TestRenderTelegramHTMLContent(t *testing.T) {
 	}
 }
 
-// TestRenderTelegramHTMLNamesASetupRun checks a dispatch-triggered setup run
-// (no ref, so the code line's branch slot is otherwise blank) says "setup"
-// right there instead of leaving it empty — the fleet-wide install must not
-// read like an ordinary deploy.
+// TestRenderTelegramHTMLNamesASetupRun checks a setup run (refless, so the code
+// line's branch slot is otherwise blank) says "setup" right there instead of
+// leaving it empty — an install must not read like an ordinary deploy.
 func TestRenderTelegramHTMLNamesASetupRun(t *testing.T) {
 	html := RenderTelegramHTML(Summary{
 		Repository: "repo",
@@ -126,27 +128,6 @@ func TestRenderTelegramHTMLNamesASetupRun(t *testing.T) {
 
 	if !strings.Contains(html, "<code>repo@setup</code>") {
 		t.Errorf("setup run does not name itself in the branch slot:\n%s", html)
-	}
-}
-
-// TestRenderTelegramHTMLNamesASetupRunWithABranch covers `repo setup <repo>
-// --branch <b>`, which sends a repository_dispatch that targets one branch of
-// a fleet — the code line's branch slot is occupied by a real branch, which
-// must survive untouched, so the bold title carries the marker instead.
-func TestRenderTelegramHTMLNamesASetupRunWithABranch(t *testing.T) {
-	html := RenderTelegramHTML(Summary{
-		Repository: "repo",
-		Ref:        "refs/heads/main",
-		Author:     "rdcstarr",
-		Status:     "success",
-		Pipeline:   "setup",
-	})
-
-	if !strings.Contains(html, "<code>repo@main</code>") {
-		t.Errorf("branched setup run lost the real branch:\n%s", html)
-	}
-	if !strings.Contains(html, "<b>✅ setup deployed</b>") {
-		t.Errorf("branched setup run does not name itself in the title:\n%s", html)
 	}
 }
 
@@ -164,40 +145,5 @@ func TestRenderTelegramHTMLOmitsPreWhenNoPaths(t *testing.T) {
 	}
 	if !strings.Contains(html, "🧪 notification test") {
 		t.Errorf("test notification does not use the dedicated Telegram card header:\n%s", html)
-	}
-}
-
-// TestRenderTelegramHTMLShowsTheAuthorOfARefLessSetupRun — see
-// TestRenderShowsTheAuthorOfARefLessSetupRun. A dispatch carries no commit, so
-// an author gated on the sha never reaches the card.
-func TestRenderTelegramHTMLShowsTheAuthorOfARefLessSetupRun(t *testing.T) {
-	html := RenderTelegramHTML(Summary{
-		Repository: "rdcstarr/tema",
-		Author:     "octocat",
-		Status:     "success",
-		Pipeline:   "setup",
-		Paths:      []PathSummary{{Path: "/var/www/api", User: "api", Status: "success"}},
-	})
-
-	if !strings.Contains(html, "octocat") {
-		t.Errorf("the sender of a dispatch-triggered setup is missing:\n%s", html)
-	}
-}
-
-// The author is push-controlled wherever it comes from, so the ref-less arm
-// escapes it exactly like the commit arm does.
-func TestRenderTelegramHTMLEscapesARefLessAuthor(t *testing.T) {
-	html := RenderTelegramHTML(Summary{
-		Repository: "o/r",
-		Author:     "a<i>b",
-		Status:     "success",
-		Pipeline:   "setup",
-	})
-
-	if strings.Contains(html, "a<i>b") {
-		t.Errorf("a ref-less author survived unescaped:\n%s", html)
-	}
-	if !strings.Contains(html, "a&lt;i&gt;b") {
-		t.Errorf("the escaped author is missing:\n%s", html)
 	}
 }

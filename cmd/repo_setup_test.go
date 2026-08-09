@@ -3,113 +3,17 @@ package cmd
 import (
 	"context"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/rdcstarr/rec-deploy/internal/config"
 	"github.com/rdcstarr/rec-deploy/internal/discover"
-	"github.com/rdcstarr/rec-deploy/internal/github"
 )
 
-func TestDispatchReachCountsSubscribedHooks(t *testing.T) {
-	hooks := []github.Hook{
-		{ID: 1, Active: true, Events: []string{"push", "repository_dispatch"}, URL: "http://1.2.3.4:9000/hook/a"},
-		{ID: 2, Active: true, Events: []string{"push"}, URL: "http://5.6.7.8:9000/hook/b"},
-		{ID: 3, Active: false, Events: []string{"push", "repository_dispatch"}, URL: "http://9.9.9.9:9000/hook/c"},
-	}
-
-	ready, stale := dispatchReach(hooks)
-	if ready != 1 {
-		t.Errorf("ready = %d, want 1 — an inactive hook delivers nothing", ready)
-	}
-	if stale != 2 {
-		t.Errorf("stale = %d, want 2", stale)
-	}
-}
-
-// TestDispatchReachCountsOnlyRecDeployWebhooks is the guard the reachability
-// check exists for. A repository that no rec-deploy server is registered on can
-// still carry webhooks — a Slack app, a CI endpoint, a hook subscribed to
-// everything with ["*"] — and counting those as servers turns the dispatch into
-// a success report for work that will happen nowhere. They are also not
-// repairable: there is no rec-deploy server behind a Slack hook to run
-// `repo check --repair` on.
-func TestDispatchReachCountsOnlyRecDeployWebhooks(t *testing.T) {
-	hooks := []github.Hook{
-		{ID: 1, Active: true, Events: []string{"push", "repository_dispatch"}, URL: "https://hooks.slack.com/services/T00/B00/xyz"},
-		{ID: 2, Active: true, Events: []string{"*"}, URL: "https://ci.example.com/github"},
-		{ID: 3, Active: true, Events: []string{"push"}, URL: "https://example.com/hooks/github"},
-	}
-
-	if ready, stale := dispatchReach(hooks); ready != 0 || stale != 0 {
-		t.Errorf("reach = %d/%d over foreign webhooks alone, want 0/0", ready, stale)
-	}
-}
-
-// TestDispatchReachRecognisesARecDeployWebhookUnderAPath covers a public_url
-// with a base path — https://host/rec-deploy — which github.HookURL appends
-// /hook/<token> to like any other.
-func TestDispatchReachRecognisesARecDeployWebhookUnderAPath(t *testing.T) {
-	hooks := []github.Hook{
-		{ID: 1, Active: true, Events: []string{"push", "repository_dispatch"}, URL: "https://example.com/rec-deploy/hook/tok"},
-		{ID: 2, Active: true, Events: []string{"*"}, URL: "http://5.6.7.8:9000/hook/tok2"},
-	}
-
-	if ready, stale := dispatchReach(hooks); ready != 2 || stale != 0 {
-		t.Errorf("reach = %d/%d, want 2/0", ready, stale)
-	}
-}
-
-func TestDispatchReachOnNoHooks(t *testing.T) {
-	if ready, stale := dispatchReach(nil); ready != 0 || stale != 0 {
-		t.Errorf("reach = %d/%d, want 0/0", ready, stale)
-	}
-}
-
-// TestSetupBranchOptionsOffersEveryBranchAndThisServersOwn covers the choice
-// that mitigates the sharpest edge in this feature: a dispatch reaches every
-// server registered on the repository, and install steps are frequently not
-// idempotent, so an operator who cannot narrow it has only the destructive
-// option. This server's own checkouts are not the fleet's answer — no server
-// knows what the others hold — but they are the honest set to offer.
-func TestSetupBranchOptionsOffersEveryBranchAndThisServersOwn(t *testing.T) {
-	options := setupBranchOptions([]discover.Installation{
-		{Path: "/var/www/prod", Branch: "main"},
-		{Path: "/var/www/staging", Branch: "develop"},
-		{Path: "/var/www/second", Branch: "main"},
-		{Path: "/var/www/detached", Branch: ""},
-	})
-
-	var values []string
-	for _, o := range options {
-		values = append(values, o.Value)
-	}
-
-	want := []string{branchEvery, "develop", "main", branchOther}
-	if !slices.Equal(values, want) {
-		t.Errorf("options = %v, want %v — every branch, each distinct local branch once, then a hand-typed one", values, want)
-	}
-}
-
-// TestSetupBranchOptionsStayUsableWithNoLocalCheckouts is the laptop case, and
-// the reason the hand-typed entry exists: `repo setup` requires no local state by
-// design, so discovery routinely finds nothing here. Narrowing must still be
-// reachable — offering only "every branch" would make the widest blast radius
-// the sole option again.
-func TestSetupBranchOptionsStayUsableWithNoLocalCheckouts(t *testing.T) {
-	options := setupBranchOptions(nil)
-
-	if len(options) != 2 || options[0].Value != branchEvery || options[1].Value != branchOther {
-		t.Fatalf("options = %+v, want every branch and a hand-typed one", options)
-	}
-}
-
-// TestLocalCheckoutsDegradesWhenDiscoveryAnswersNothing pins the other half of
-// that: discovery is an offer here, never a requirement. A scan that finds
-// nothing — or fails outright on a machine with no discovery roots — narrows
-// what can be offered instead of ending a command documented to need no local
-// state at all.
+// TestLocalCheckoutsDegradesWhenDiscoveryAnswersNothing pins that discovery is an
+// offer here, never a requirement. A scan that finds nothing — or fails outright
+// on a machine with no discovery roots — narrows what the confirmation can
+// describe instead of ending the command; the engine discovers again for itself.
 func TestLocalCheckoutsDegradesWhenDiscoveryAnswersNothing(t *testing.T) {
 	saved := cfg
 	defer func() { cfg = saved }()
@@ -122,14 +26,46 @@ func TestLocalCheckoutsDegradesWhenDiscoveryAnswersNothing(t *testing.T) {
 	}
 }
 
-func TestSetupCmdFlags(t *testing.T) {
+// TestSetupCmdIsLocalOnly pins what v0.16.1 removed. `repo setup` used to offer a
+// fleet arm that asked GitHub to deliver a repository_dispatch to every server
+// registered on the repository — a transport that does not exist for repository
+// webhooks, and whose mere presence in the events array took `repo add` down
+// with a 422. What is left runs on this server, so there is no branch to choose
+// across machines and no --branch flag to choose it with.
+func TestSetupCmdIsLocalOnly(t *testing.T) {
 	cmd := newRepoSetupCmd()
 
-	if cmd.Flags().Lookup("branch") == nil {
-		t.Error("--branch is not registered")
+	if cmd.Flags().Lookup("branch") != nil {
+		t.Error("--branch is still registered — it only ever narrowed a fleet-wide dispatch")
 	}
-	if !strings.Contains(cmd.Long, "every server") {
-		t.Errorf("Long does not say the dispatch reaches every server: %q", cmd.Long)
+	if strings.Contains(cmd.Long, "every server") {
+		t.Errorf("Long still claims a fleet-wide reach: %q", cmd.Long)
+	}
+	if !strings.Contains(cmd.Long, "this server") {
+		t.Errorf("Long does not say where setup runs: %q", cmd.Long)
+	}
+	if !strings.Contains(cmd.Long, "--yes") {
+		t.Errorf("Long does not say how to run it unattended: %q", cmd.Long)
+	}
+}
+
+// TestRunLocalSetupRefusesWithoutYesOutsideATerminal covers the scripted form,
+// which the fleet arm used to swallow: every non-interactive run went to the
+// dispatch, so the local arm was reachable from the interactive menu alone.
+// Now it is the only arm, and it owes the same guard as every other destructive
+// action — setup steps are frequently not idempotent. Tests have no TTY, so
+// isInteractive() is false here.
+func TestRunLocalSetupRefusesWithoutYesOutsideATerminal(t *testing.T) {
+	saved := flagYes
+	defer func() { flagYes = saved }()
+	flagYes = false
+
+	err := runLocalSetup(context.Background(), "o/r")
+	if err == nil {
+		t.Fatal("runLocalSetup outside a terminal without --yes = nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("error = %q, want the re-run hint in backticks", err)
 	}
 }
 
@@ -142,13 +78,12 @@ func TestRepoMenuOffersSetup(t *testing.T) {
 	t.Error("the repo hub does not offer setup")
 }
 
-// TestDescribeLocalSetupNamesEveryCheckoutAndItsBranch pins what the local arm
-// owes before it runs. "This server" reached the engine with no branch question
-// and no confirmation, so a box holding staging on develop and production on
-// main ran the setup steps on production from two menu picks. The confirmation
-// has to show which trees it will hit and the branch each is on — and point at
-// the flag that narrows further, since the local arm deliberately grows no
-// branch plumbing of its own.
+// TestDescribeLocalSetupNamesEveryCheckoutAndItsBranch pins what the confirmation
+// owes before it runs. "This server" hides that a box holding staging on develop
+// and production on main will run the setup steps on production too, so the
+// prompt names which trees it will hit and the branch each is on — and points at
+// the flag that narrows further, since setup deliberately grows no branch
+// plumbing of its own.
 func TestDescribeLocalSetupNamesEveryCheckoutAndItsBranch(t *testing.T) {
 	got := describeLocalSetup([]discover.Installation{
 		{Path: "/var/www/prod", Branch: "main"},
@@ -174,47 +109,5 @@ func TestDescribeLocalSetupStaysHonestWithNoCheckouts(t *testing.T) {
 
 	if !strings.Contains(got, "o/r") || !strings.Contains(got, "this server") {
 		t.Errorf("describeLocalSetup(nil) = %q, want it to still say what the run covers", got)
-	}
-}
-
-// TestServerCountSaysWhenTheListingWasCutShort is the other half of the page
-// fix. Hooks reads one page of github.HooksPerPage, so a full page back means
-// GitHub had more to give and the count is a floor. Printed bare it would state
-// a number that is simply wrong, on the one line an operator uses to decide
-// whether a fleet-wide dispatch is going where they think.
-func TestServerCountSaysWhenTheListingWasCutShort(t *testing.T) {
-	if got := serverCount(3, false); got != plural(3, "server") {
-		t.Errorf("serverCount(3, false) = %q, want the plain count", got)
-	}
-
-	got := serverCount(github.HooksPerPage, true)
-	if !strings.Contains(got, "at least") {
-		t.Errorf("serverCount(full page) = %q, want it to read as a floor", got)
-	}
-}
-
-// TestScopeAnsweredTreatsYesAsTheFleetDispatch is the fix for a command
-// documented as running from a laptop and unusable that way over a TTY.
-// `ssh -t host 'rec-deploy repo setup o/r --yes'` opened the scope menu and
-// blocked: there was no way at all to say "every branch, every server, don't
-// ask".
-func TestScopeAnsweredTreatsYesAsTheFleetDispatch(t *testing.T) {
-	if !scopeAnswered(true, true, false) {
-		t.Error("--yes in a terminal still opens the scope menu — there is no way to run this command unattended over a tty")
-	}
-	if !scopeAnswered(true, false, true) {
-		t.Error("--branch names the fleet arm and its branch, so nothing is left to ask")
-	}
-	if !scopeAnswered(false, false, false) {
-		t.Error("outside a terminal there is nobody to ask")
-	}
-	if scopeAnswered(true, false, false) {
-		t.Error("a bare interactive run must still ask: the two triggers differ by blast radius")
-	}
-}
-
-func TestSetupCmdLongDocumentsYes(t *testing.T) {
-	if !strings.Contains(newRepoSetupCmd().Long, "--yes") {
-		t.Error("Long does not say that --yes answers the scope question")
 	}
 }

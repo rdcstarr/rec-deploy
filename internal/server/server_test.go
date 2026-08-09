@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -183,15 +182,25 @@ func TestPingIs200AndDoesNotDeploy(t *testing.T) {
 	}
 }
 
+// TestNonPushEventIs204 covers repository_dispatch alongside an ordinary
+// unsubscribed event, and that pairing is the point: until v0.16.1 a
+// rec-deploy-setup dispatch ran the manifest's setup block on every checkout.
+// The transport never worked — repository_dispatch is app-only, so a repository
+// webhook cannot receive it — and the daemon now runs post_deploy and nothing
+// else. A dispatch that somehow arrives must be as inert as any other event
+// nobody subscribed to: setup steps are rarely idempotent, and nothing reaching
+// this handler is confirmed by an operator.
 func TestNonPushEventIs204(t *testing.T) {
 	h := newHarness(t)
 
-	body := `{}`
-	if rec := h.post(t, "tok", "issues", "d1", body, signed(body)); rec.Code != http.StatusNoContent {
-		t.Errorf("issues event = %d, want 204", rec.Code)
+	for _, event := range []string{"issues", "repository_dispatch"} {
+		body := `{"action":"rec-deploy-setup","repository":{"full_name":"rdcstarr/tema"},"sender":{"login":"rdcstarr"}}`
+		if rec := h.post(t, "tok", event, "d-"+event, body, signed(body)); rec.Code != http.StatusNoContent {
+			t.Errorf("%s event = %d, want 204", event, rec.Code)
+		}
 	}
 	if got := h.dispatchedDeploys(); len(got) != 0 {
-		t.Error("a non-push event dispatched a deploy")
+		t.Errorf("%d deploys dispatched, want none — no webhook event but push may deploy", len(got))
 	}
 }
 
@@ -418,100 +427,5 @@ func TestDrainCancelsADeployPastTheBudget(t *testing.T) {
 	case <-reported:
 	default:
 		t.Fatal("the cancelled deploy never got to report")
-	}
-}
-
-const dispatchBody = `{"action":"rec-deploy-setup","repository":{"full_name":"rdcstarr/tema"},"sender":{"login":"rdcstarr"}}`
-
-func TestSetupDispatchDeploys(t *testing.T) {
-	h := newHarness(t)
-
-	if rec := h.post(t, "tok", "repository_dispatch", "d1", dispatchBody, signed(dispatchBody)); rec.Code != http.StatusOK {
-		t.Fatalf("dispatch = %d, want 200", rec.Code)
-	}
-	h.awaitDeploy(t)
-
-	got := h.dispatchedDeploys()
-	if len(got) != 1 {
-		t.Fatalf("deploys = %d, want 1", len(got))
-	}
-	if !got[0].Setup {
-		t.Error("Setup = false, want true")
-	}
-	if got[0].Ref != "" {
-		t.Errorf("Ref = %q, want empty — a dispatch names no branch here", got[0].Ref)
-	}
-	if got[0].Author != "rdcstarr" {
-		t.Errorf("Author = %q, want the sender's login", got[0].Author)
-	}
-}
-
-func TestSetupDispatchWithABranchNarrowsTheRef(t *testing.T) {
-	h := newHarness(t)
-	body := `{"action":"rec-deploy-setup","client_payload":{"branch":"develop"},"repository":{"full_name":"rdcstarr/tema"},"sender":{"login":"rdcstarr"}}`
-
-	if rec := h.post(t, "tok", "repository_dispatch", "d1", body, signed(body)); rec.Code != http.StatusOK {
-		t.Fatalf("dispatch = %d, want 200", rec.Code)
-	}
-	h.awaitDeploy(t)
-
-	if got := h.dispatchedDeploys(); got[0].Ref != "refs/heads/develop" {
-		t.Errorf("Ref = %q, want refs/heads/develop", got[0].Ref)
-	}
-}
-
-func TestUnknownDispatchActionIsIgnored(t *testing.T) {
-	h := newHarness(t)
-	body := `{"action":"deploy-docs","repository":{"full_name":"rdcstarr/tema"},"sender":{"login":"rdcstarr"}}`
-
-	if rec := h.post(t, "tok", "repository_dispatch", "d1", body, signed(body)); rec.Code != http.StatusNoContent {
-		t.Errorf("unknown action = %d, want 204", rec.Code)
-	}
-	if got := h.dispatchedDeploys(); len(got) != 0 {
-		t.Errorf("deploys = %d, want none", len(got))
-	}
-}
-
-func TestRepeatedDispatchDeliveryIsANoOp(t *testing.T) {
-	h := newHarness(t)
-
-	if rec := h.post(t, "tok", "repository_dispatch", "same", dispatchBody, signed(dispatchBody)); rec.Code != http.StatusOK {
-		t.Fatalf("first dispatch = %d, want 200", rec.Code)
-	}
-	h.awaitDeploy(t)
-
-	if rec := h.post(t, "tok", "repository_dispatch", "same", dispatchBody, signed(dispatchBody)); rec.Code != http.StatusOK {
-		t.Fatalf("replay = %d, want 200", rec.Code)
-	}
-	if got := h.dispatchedDeploys(); len(got) != 1 {
-		t.Errorf("deploys = %d, want 1 — a replayed delivery must not re-deploy", len(got))
-	}
-}
-
-func TestTamperedDispatchIs401(t *testing.T) {
-	h := newHarness(t)
-	tampered := `{"action":"rec-deploy-setup","repository":{"full_name":"rdcstarr/tema"},"sender":{"login":"attacker"}}`
-
-	if rec := h.post(t, "tok", "repository_dispatch", "d1", tampered, signed(dispatchBody)); rec.Code != http.StatusUnauthorized {
-		t.Errorf("tampered dispatch = %d, want 401", rec.Code)
-	}
-}
-
-// TestIgnoredDispatchLevel pins where a mistyped event_type surfaces. The README
-// advertises a bare `gh api … -f event_type=rec-deploy-setup`, and a typo in it
-// is answered 204 by every server registered on the repository. Logged at Debug
-// while serve runs at Info, that mistake leaves no journal line anywhere — the
-// operator sees a successful request and no deploy, on every machine at once.
-// A repository's own unrelated dispatches stay at Debug: someone else's CI must
-// not fill the journal.
-func TestIgnoredDispatchLevel(t *testing.T) {
-	if got := ignoredDispatchLevel("rec-deploy-setups"); got != slog.LevelInfo {
-		t.Errorf("level of a typo'd rec-deploy action = %v, want Info", got)
-	}
-	if got := ignoredDispatchLevel("rec-deploy_setup"); got != slog.LevelInfo {
-		t.Errorf("level of a typo'd rec-deploy action = %v, want Info", got)
-	}
-	if got := ignoredDispatchLevel("deploy-staging"); got != slog.LevelDebug {
-		t.Errorf("level of a repository's own dispatch = %v, want Debug", got)
 	}
 }

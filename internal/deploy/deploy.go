@@ -50,8 +50,8 @@ type Options struct {
 	// Path restricts the deploy to one installation.
 	Path string
 	// Setup prepends the manifest's setup block to post_deploy. It is a first
-	// install — `repo install`, or `repo deploy --setup` — or one an operator
-	// asked to repeat from a laptop through a repository_dispatch.
+	// install — `repo install`, `repo setup`, or `repo deploy --setup`. No webhook
+	// sets it: a push runs post_deploy alone.
 	Setup bool
 	// Roots and Prune configure discovery.
 	Roots, Prune []string
@@ -293,12 +293,11 @@ func deployPath(ctx context.Context, in discover.Installation, opts Options) Pat
 	// A setup run is answered against the code already on disk, before git
 	// touches anything. The pulled manifest is what actually runs — the deploy
 	// steps version with the code — but by the time it is read the tree has been
-	// fast-forwarded and `git clean -fd` has deleted every untracked file, and a
-	// `repo setup` dispatch lands on every server registered on the repository at
-	// once. The overwhelmingly common mistake is a repository whose checked-out
-	// code declares no setup block at all, so refusing here costs a correct
-	// checkout nothing and protects the whole fleet from a run that moves every
-	// tree and then executes nothing.
+	// fast-forwarded and `git clean -fd` has deleted every untracked file, on
+	// every checkout of the repository this server holds. The overwhelmingly
+	// common mistake is a repository whose checked-out code declares no setup
+	// block at all, so refusing here costs a correct checkout nothing and saves
+	// the rest from a run that moves every tree and then executes nothing.
 	//
 	// A missing or unparseable manifest is deliberately not refused here: the pull
 	// may well bring a valid one, and that is the existing contract.

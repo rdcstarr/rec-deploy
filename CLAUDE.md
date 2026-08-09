@@ -283,6 +283,13 @@ because a server can be running any mix of the three artifacts this ships:
 - **`install.sh` is served from `main` and installs the newest published release.** A change
   to it goes live the moment it merges, against a tarball built from an older tag. Merge
   and tag together.
+- **A GitHub webhook event name is checked against GitHub's availability table, never
+  against a stub.** `CreateHook`/`UpdateHook` send an `events` array GitHub validates *as a
+  unit* against what a **repository** webhook may hold; a single app-only name fails the
+  whole call with a `422`. v0.16.0 added `repository_dispatch` — availability `app` alone —
+  and `repo add` and `repo rotate` broke for every repository on every server. An `httptest`
+  stub accepts anything, so no unit test can see this: before adding a name, read its
+  availability list in GitHub's webhook documentation and confirm it says `repository`.
 
 ---
 

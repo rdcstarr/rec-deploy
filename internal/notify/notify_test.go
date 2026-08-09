@@ -78,9 +78,8 @@ func TestSubject(t *testing.T) {
 	}
 }
 
-// TestSummaryNamesASetupRun pins why this field exists: an install that ran
-// unattended across a fleet (repo install, `repo deploy --setup`, or a
-// repository_dispatch sent to no particular branch — all refless) must not
+// TestSummaryNamesASetupRun pins why this field exists: an install run
+// (`repo install`, `repo setup`, `repo deploy --setup` — all refless) must not
 // render identically to a routine push. The plain body is what journald logs
 // and what Telegram falls back to, so this is the floor every channel has to
 // clear.
@@ -95,22 +94,6 @@ func TestSummaryNamesASetupRun(t *testing.T) {
 	got := Render(sum)
 	if !strings.Contains(strings.ToLower(got), "setup") {
 		t.Errorf("a setup run rendered as an ordinary deploy:\n%s", got)
-	}
-}
-
-// TestSubjectNamesASetupRunWithABranch covers the other trigger shape:
-// `repo setup <repo> --branch <b>` sends a repository_dispatch that targets
-// one branch of a fleet, so this run carries a real ref. The branch slot has
-// to keep it — see branchLabel — so the marker must show up somewhere else,
-// and the run must still not read as an ordinary deploy.
-func TestSubjectNamesASetupRunWithABranch(t *testing.T) {
-	got := Subject(Summary{Repository: "rdcstarr/tema", Ref: "refs/heads/main", Status: "success", Pipeline: "setup"})
-
-	if !strings.Contains(got, "rdcstarr/tema@main") {
-		t.Errorf("Subject = %q, lost the real branch", got)
-	}
-	if !strings.Contains(strings.ToLower(got), "setup") {
-		t.Errorf("Subject = %q, a branched setup run rendered as an ordinary deploy", got)
 	}
 }
 
@@ -223,25 +206,5 @@ func TestDeliverSendsTelegramSuccessfully(t *testing.T) {
 	em := results[1]
 	if em.Channel != "email" || !em.Skipped {
 		t.Errorf("email result = %+v, want Skipped (not configured)", em)
-	}
-}
-
-// TestRenderShowsTheAuthorOfARefLessSetupRun pins who asked. A
-// repository_dispatch carries no commit by design, and its author is the GitHub
-// login of whoever sent it — the only record of who asked for a setup that ran
-// unattended on every server registered on the repository. Rendered only
-// alongside a sha, it is stored and never shown, and recovering it means an SSH
-// session on a server, which is the thing this trigger exists to avoid.
-func TestRenderShowsTheAuthorOfARefLessSetupRun(t *testing.T) {
-	body := Render(Summary{
-		Repository: "rdcstarr/tema",
-		Author:     "octocat",
-		Status:     "success",
-		Pipeline:   "setup",
-		Paths:      []PathSummary{{Path: "/var/www/api", User: "api", Status: "success"}},
-	})
-
-	if !strings.Contains(body, "octocat") {
-		t.Errorf("the sender of a dispatch-triggered setup is missing:\n%s", body)
 	}
 }

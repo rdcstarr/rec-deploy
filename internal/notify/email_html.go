@@ -26,8 +26,7 @@ const emailTemplate = `<!DOCTYPE html>
 <tr><td style="padding:24px 26px 26px;font:13.5px/1.85 ui-monospace,'Cascadia Mono',Consolas,'Liberation Mono',monospace;color:#c9d1d9">
 <span style="color:#6d7278">$ {{.Verb}} {{with .SHA7}}{{.}} {{end}}→ {{.Repository}}@{{.Branch}}</span><br>
 {{if .SHA7}}<span style="color:#58a6ff">›</span> commit <span style="color:#e0a63f">{{.SHA7}}</span>{{with .Author}} by {{.}}{{end}}<br>
-{{else}}{{with .Author}}<span style="color:#58a6ff">›</span> requested by <span style="color:#e0a63f">{{.}}</span><br>
-{{end}}{{end}}{{with .MessageLine}}<span style="color:#58a6ff">›</span> <span style="color:#8b949e">{{.}}</span><br>
+{{end}}{{with .MessageLine}}<span style="color:#58a6ff">›</span> <span style="color:#8b949e">{{.}}</span><br>
 {{end}}{{with .Error}}<span style="color:#f2635a">! {{.}}</span><br>
 {{end}}<br>
 {{range $p := .Paths}}<span style="color:{{$p.Color}}">{{$p.Glyph}}</span> {{$p.Path}}{{if $p.RanAsRoot}} <span style="color:#e0a63f">⚠ root</span>{{else if $p.User}} <span style="color:#6d7278">({{$p.User}})</span>{{end}}{{with $p.StatusWord}} <span style="color:{{$p.Color}}">{{.}}</span>{{end}}<br>
@@ -50,11 +49,9 @@ type emailView struct {
 	Branch     string
 	Verb       string // "push" | "setup" — what triggered the run, per Summary.Pipeline
 	SHA7       string
-	// Author is who the run came from: the commit's author on a push, and on a
-	// repository_dispatch the GitHub login of whoever sent it. A dispatch carries
-	// no commit, so the card renders it on its own line there — gated on the sha
-	// it would never be shown at all, and it is the only record of who asked for
-	// a setup that ran unattended across the fleet.
+	// Author is the commit's author, shown beside the sha. Only a push carries
+	// either: a setup run started on the server has no commit and nobody to name
+	// but whoever was at the terminal.
 	Author       string
 	MessageLine  string
 	Error        string
@@ -62,7 +59,7 @@ type emailView struct {
 	Host         string
 	VerdictGlyph string // "✓" | "!" | "›"
 	VerdictColor string // green | red | amber
-	VerdictWord  string // "deployed" | "failed" | the raw status, "setup " prefixed per needsSetupNote
+	VerdictWord  string // "deployed" | "failed" | the raw status
 	JournalHint  bool   // only on failure
 	Failed       bool   // failure livery: border + chrome colors
 	Tail         string
@@ -111,11 +108,6 @@ func RenderHTML(s Summary) (string, error) {
 	default: // "skipped", "test", anything neutral — no failure livery
 		v.VerdictGlyph, v.VerdictColor, v.VerdictWord = "›", "#e0a63f", s.Status
 	}
-	if needsSetupNote(s) {
-		// Branch is showing the real branch this setup run targeted, so the
-		// verdict line carries the marker instead — see needsSetupNote.
-		v.VerdictWord = "setup " + v.VerdictWord
-	}
 	if v.Failed {
 		v.Border, v.ChromeBG = "#3a2724", "#1a1416"
 	}
@@ -162,10 +154,10 @@ func RenderHTML(s Summary) (string, error) {
 }
 
 // verb names, on the card's command line, what triggered the run. A setup run
-// arrives through `repo install`, `repo deploy --setup` or a
-// repository_dispatch sent from a laptop: none of them a push, and none of them
-// carrying the commit that line would otherwise show. It reads the same field
-// branchLabel and needsSetupNote do, so all three agree on what the run was.
+// arrives through `repo install`, `repo setup` or `repo deploy --setup`: none of
+// them a push, and none of them carrying the commit that line would otherwise
+// show. It reads the same field branchLabel does, so both agree on what the run
+// was.
 func verb(s Summary) string {
 	if s.Pipeline == "setup" {
 		return "setup"

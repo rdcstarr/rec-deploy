@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/rdcstarr/rec-deploy/internal/buildinfo"
 	"github.com/rdcstarr/rec-deploy/internal/cli"
 	"github.com/rdcstarr/rec-deploy/internal/config"
 	"github.com/rdcstarr/rec-deploy/internal/deploy"
@@ -48,6 +49,13 @@ func newServeCmd() *cobra.Command {
 			if !flagVerbose {
 				cli.SetupLogger(slog.LevelInfo)
 			}
+
+			// Which build is serving, logged before anything else can fail. After an
+			// unattended update, "is the daemon on the new binary?" has to be
+			// answerable from `journalctl -u rec-deploy` alone — without it the only
+			// honest answer comes from reading /proc/<pid>/exe for a `(deleted)`
+			// suffix, which is not something an operator should have to know.
+			slog.Info("rec-deploy starting", "version", buildinfo.Resolved(), "commit", buildinfo.Commit)
 
 			cfg := Config()
 			if listen != "" {
@@ -115,7 +123,6 @@ func newServeCmd() *cobra.Command {
 						SHA:        t.SHA,
 						Message:    t.Message,
 						Author:     t.Author,
-						Setup:      t.Setup,
 						Roots:      fcfg.Discovery.Roots,
 						Prune:      fcfg.Discovery.Prune,
 						KeysDir:    keysDir,

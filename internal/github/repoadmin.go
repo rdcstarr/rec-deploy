@@ -72,10 +72,14 @@ func isDots(s string) bool { return strings.Trim(s, ".") == "" }
 // UpdateHook rewrites this server's webhook — the whole config, not just the
 // rotated secret: GitHub replaces the config object wholesale, so a partial body
 // would blank the delivery URL and re-open insecure_ssl.
+//
+// The events array must stay in step with CreateHook's, and carries the same
+// constraint for the same reason: PATCH validates it exactly as POST does, so an
+// event a repository webhook may not hold takes `repo rotate` down here.
 func (c *Client) UpdateHook(ctx context.Context, repo string, id int64, url, secret string) error {
 	in := map[string]any{
 		"active": true,
-		"events": []string{"push", "repository_dispatch"},
+		"events": []string{"push"},
 		"config": map[string]any{
 			"url":          url,
 			"content_type": "json",

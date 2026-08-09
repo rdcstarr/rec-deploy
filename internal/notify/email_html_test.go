@@ -107,10 +107,9 @@ func TestRenderHTMLFailureBody(t *testing.T) {
 	}
 }
 
-// TestRenderHTMLNamesASetupRun checks a dispatch-triggered setup run (no ref,
-// so the push line's branch slot is otherwise blank) says "setup" right
-// there instead of leaving it empty — the fleet-wide install must not read
-// like an ordinary deploy.
+// TestRenderHTMLNamesASetupRun checks a setup run (refless, so the push line's
+// branch slot is otherwise blank) says "setup" right there instead of leaving it
+// empty — an install must not read like an ordinary deploy.
 func TestRenderHTMLNamesASetupRun(t *testing.T) {
 	html, err := RenderHTML(Summary{
 		Repository: "rdcstarr/tema",
@@ -128,8 +127,8 @@ func TestRenderHTMLNamesASetupRun(t *testing.T) {
 
 // TestRenderHTMLDoesNotCallASetupRunAPush pins the card's first line, which
 // mirrors the command that triggered the run. A setup run reaches a server
-// through `repo install`, `repo deploy --setup` or a repository_dispatch sent
-// from a laptop — none of them a push, and none of them carrying a commit.
+// through `repo install`, `repo setup` or `repo deploy --setup` — none of them a
+// push, and none of them carrying a commit.
 func TestRenderHTMLDoesNotCallASetupRunAPush(t *testing.T) {
 	html, err := RenderHTML(Summary{
 		Repository: "rdcstarr/tema",
@@ -145,29 +144,6 @@ func TestRenderHTMLDoesNotCallASetupRunAPush(t *testing.T) {
 	}
 	if !strings.Contains(html, "$ setup") {
 		t.Errorf("the card does not name the run it describes:\n%s", html)
-	}
-}
-
-// TestRenderHTMLNamesASetupRunWithABranch covers `repo setup <repo> --branch
-// <b>`, which sends a repository_dispatch that targets one branch of a fleet
-// — the push line's branch slot is occupied by a real branch, which must
-// survive untouched, so the verdict line carries the marker instead.
-func TestRenderHTMLNamesASetupRunWithABranch(t *testing.T) {
-	html, err := RenderHTML(Summary{
-		Repository: "rdcstarr/tema",
-		Ref:        "refs/heads/main",
-		Status:     "success",
-		Pipeline:   "setup",
-	})
-	if err != nil {
-		t.Fatalf("RenderHTML: %v", err)
-	}
-
-	if !strings.Contains(html, "→ rdcstarr/tema@main") {
-		t.Errorf("branched setup run lost the real branch:\n%s", html)
-	}
-	if !strings.Contains(html, `color:#39d47f;font-weight:bold">✓ setup deployed</span>`) {
-		t.Errorf("branched setup run does not name itself in the verdict line:\n%s", html)
 	}
 }
 
@@ -211,27 +187,5 @@ func TestRenderHTMLNeutralStatuses(t *testing.T) {
 	}
 	if strings.Contains(html, "#3a2724") {
 		t.Errorf("skipped card unexpectedly wears the failure border")
-	}
-}
-
-// TestRenderHTMLShowsTheAuthorOfARefLessSetupRun — see
-// TestRenderShowsTheAuthorOfARefLessSetupRun. The card gated the author line on
-// {{if .SHA7}}, and a dispatch has no commit, so the one channel an operator
-// reads at 3am never said whether a fleet-wide setup came from a colleague, a
-// stolen token or their own laptop.
-func TestRenderHTMLShowsTheAuthorOfARefLessSetupRun(t *testing.T) {
-	html, err := RenderHTML(Summary{
-		Repository: "rdcstarr/tema",
-		Author:     "octocat",
-		Status:     "success",
-		Pipeline:   "setup",
-		Paths:      []PathSummary{{Path: "/var/www/api", User: "api", Status: "success"}},
-	})
-	if err != nil {
-		t.Fatalf("RenderHTML: %v", err)
-	}
-
-	if !strings.Contains(html, "octocat") {
-		t.Errorf("the sender of a dispatch-triggered setup is missing:\n%s", html)
 	}
 }

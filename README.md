@@ -47,7 +47,9 @@ Prefer a package? Grab one from the
 [releases](https://github.com/rdcstarr/rec-deploy/releases). The `.deb` / `.rpm` install
 the binary to `/usr/bin/rec-deploy`, drop the systemd unit, and create `/etc/rec-deploy` and
 `/var/lib/rec-deploy` (both `0700` — they hold the GitHub token, the HMAC secrets and the
-deploy keys).
+deploy keys). Upgrading a package `try-restart`s whatever is already running — the daemon
+and, when it runs as its own unit, the MCP origin — because replacing the file on disk
+does not move a live process onto it. A unit you deliberately stopped stays stopped.
 
 ```sh
 # Debian / Ubuntu
@@ -152,8 +154,10 @@ credentials, and each channel now proves its own. `rec-deploy notifications test
 delivers a real message whenever you want one.
 
 **[7] Auto-update** — opt-in systemd timer that checks releases hourly and swaps
-the binary after checksum verification, restarting the daemon. Disable any time
-with `systemctl disable --now rec-deploy-update.timer`.
+the binary after checksum verification, restarting the daemon. The MCP origin is
+restarted too when it runs as its own unit, and only once the daemon has proven
+healthy on the new release. Disable any time with `systemctl disable --now
+rec-deploy-update.timer`.
 
 SMTP works on both transports: port `465` is the submissions port and is dialled
 with TLS from the first byte, while every other port starts in the clear and is
@@ -383,49 +387,29 @@ run and leaves the tree exactly where it stopped, for you to look at. There is u
 code change to undo, so resetting the tree and re-running the previous `post_deploy` would
 not undo anything either.
 
-A setup run happens in exactly three ways:
+A setup run happens in exactly three ways, all of them on the server:
 
 - `rec-deploy repo install <owner/repo> <path>` — automatic, on a first install.
-- `rec-deploy repo deploy <owner/repo> --setup` — this server only.
-- `rec-deploy repo setup <owner/repo>` — every server registered on the repository.
+- `rec-deploy repo deploy <owner/repo> --setup [--path <p>]` — one repository, or one checkout.
+- `rec-deploy repo setup <owner/repo>` — every checkout of the repository on this server.
 
-That last one is fleet-wide by design: a single command reaches every machine that
-registered a webhook on the repository, with no per-server loop and no inventory to keep.
-`--branch` narrows it to the checkouts sitting on one branch, which matters because a
-`setup` step can run again at any time, at the request of anyone with write access to the
-repository — write steps that survive a second run. `php artisan key:generate` does not:
-on a live site it invalidates every session and everything encrypted with the old key. A
-dispatch meant for staging that also lands on production, with no way to say otherwise, is
-the sharpest edge this feature has.
+None of them is a push: the daemon runs `post_deploy` and never `setup`. That is deliberate.
+A `setup` step can be destructive on a live site — `php artisan key:generate` invalidates
+every session and everything encrypted with the old key — so it is an operator action, taken
+at the terminal, and never something a `git push` can set off.
 
-So in a terminal, `rec-deploy repo setup <owner/repo>` is two questions before anything is
-sent. *Where*: this server, or every server registered on the repository. Then, for the
-fleet, *which branch*: every branch, one of the branches this server's own checkouts sit
-on, or one typed by hand. Those local branches are not the fleet's answer — no server
-knows what the others hold — but they are the honest set to offer, and they beat typing a
-branch name blind into a command that reaches every machine. Choosing *this server*
-confirms first, listing the checkouts it will reach and the branch each is on;
-`rec-deploy repo deploy <owner/repo> --setup --path <p>` narrows it to one.
+`rec-deploy repo setup <owner/repo>` confirms first, listing the checkouts it will reach and
+the branch each is on; `--yes` runs it unattended, which is what makes it usable over
+`ssh -t`, in CI or from a script. Narrow it to a single checkout with
+`rec-deploy repo deploy <owner/repo> --setup --path <p>`.
 
-`--branch` and `--yes` each answer both questions at once and send the dispatch with
-nothing asked: `--branch` to the checkouts on that branch, `--yes` to every branch. That
-is what makes the command usable over `ssh -t`, which is how it is meant to be run. Piped,
-in CI or under systemd nothing is asked at all and the flags are the whole instruction.
-
-`rec-deploy repo setup` needs the binary and a GitHub token, nothing else — no store, no
-registered repository. Where this server holds checkouts of its own, the branch question
-offers their branches; where it holds none, the same command works with a branch typed by
-hand. The request also works as a bare `gh api` call, from any machine with `gh`
-authenticated against the repository:
-
-```sh
-gh api repos/rdcstarr/tema-mea/dispatches -f event_type=rec-deploy-setup
-```
-
-The request travels the existing webhook: same URL, same HMAC secret, same delivery
-deduplication as a push. A webhook registered before this feature subscribes to `push`
-alone and will not receive it — `rec-deploy repo check <owner/repo> --repair` fixes that,
-once, on each server whose webhook still predates this feature.
+> **Removed in v0.16.1.** `repo setup` used to reach *every* server registered on the
+> repository, by asking GitHub to deliver a `repository_dispatch`. That transport does not
+> exist: `repository_dispatch` is available to GitHub Apps only, so a repository webhook
+> registered with a personal access token may not subscribe to it — and merely naming it in
+> the events array made GitHub reject the whole call with a `422`, which broke `repo add` and
+> `repo rotate` for every repository in v0.16.0. The fan-out was removed rather than rebuilt
+> on another transport. Run setup on each server, or from a loop over `ssh`.
 
 ## Many servers
 
@@ -440,8 +424,8 @@ GitHub push
 
 No control plane, no agent inventory, no SSH between servers, no single point of failure.
 A server that is down misses its push and catches up with `rec-deploy repo deploy owner/repo`.
-A single `rec-deploy repo setup` reaches every server registered on the repository, and
-each server owns its own webhook, so each repairs its own with `repo check --repair`.
+Each server owns its own webhook, so each repairs its own with `repo check --repair`, and
+each runs its own `rec-deploy repo setup` — there is no fleet-wide trigger.
 
 ## Security posture
 
@@ -459,16 +443,11 @@ services in `/opt` belong to no site user — but they are **flagged loudly** (`
 `rec-deploy status` and in every notification), because push access to such a repository is
 root on the server and that should be visible rather than discovered. If leaking commit
 metadata to a network observer is unacceptable, run with `--listen 127.0.0.1:9000` behind
-an nginx with TLS; no extra code is needed. Sending a `repository_dispatch` needs write
-access to the repository — the same access that already lets someone push a commit whose
-`post_deploy` runs arbitrary commands on the server, so on a repository without branch
-protection the trigger grants no capability that did not exist. Under branch protection it
-does grant one, and this is worth being precise about: protection rules and CODEOWNERS
-govern `git push`, not `POST /repos/{owner}/{repo}/dispatches`. A collaborator who cannot
-push to `main` can still ask every server in the fleet to re-run `setup` and `post_deploy`
-against their `main` checkouts. They cannot inject code that way — each tree is reset to
-the branch's existing HEAD — but they choose when those commands run, which is narrower
-than remote code execution and wider than nothing.
+an nginx with TLS; no extra code is needed.
+
+The only thing a webhook delivery can trigger is `post_deploy`, against the commit the
+branch already points at. There is no remote trigger for `setup`, and no payload field that
+selects which commands run.
 
 ## Commands
 
@@ -487,7 +466,7 @@ rec-deploy repo rotate <owner/repo>               # roll the HMAC secret and the
 rec-deploy repo install <owner/repo> <path>       # clone into path as its owner
 rec-deploy repo deploy <owner/repo> [--path P]    # deploy now; command output in rec-deploy logs
 rec-deploy repo deploy <owner/repo> --setup       # run setup then post_deploy, on this server
-rec-deploy repo setup <owner/repo> [--branch B]   # ask every server on this repo to run setup
+rec-deploy repo setup <owner/repo> [--yes]        # run setup then post_deploy, every checkout here
 rec-deploy repo rollback <owner/repo> [--path P]  # back to the previous SHA
 rec-deploy repo scan                              # what discovery finds, and why
 rec-deploy repo config get <key> | set <key> <value> | path

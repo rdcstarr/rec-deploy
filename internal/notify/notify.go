@@ -43,27 +43,18 @@ type PathSummary struct {
 	RanAsRoot bool
 }
 
-// Subject is the one-line headline: repository, branch, outcome. A setup run
-// that targeted one branch of a fleet (`repo setup <repo> --branch <b>`) says
-// so in the "rec-deploy" prefix, since branchLabel's slot is busy with the
-// real branch there — see needsSetupNote.
+// Subject is the one-line headline: repository, branch, outcome.
 func Subject(s Summary) string {
-	prefix := "rec-deploy"
-	if needsSetupNote(s) {
-		prefix += " setup"
-	}
-
-	return fmt.Sprintf("%s: %s@%s %s", prefix, s.Repository, branchLabel(s), s.Status)
+	return fmt.Sprintf("rec-deploy: %s@%s %s", s.Repository, branchLabel(s), s.Status)
 }
 
 // branchLabel is what every renderer shows where the pushed branch would
 // sit: the branch name for an ordinary deploy, or "setup" when there is none
-// to show — a first install, `repo deploy --setup`, and a repository_dispatch
-// sent to no particular branch are all refless, and that slot is exactly
-// where a routine push would name its branch. Left blank, a setup run that
-// went out unattended across a fleet reads identically to an ordinary push;
-// filled with "setup", it reads as what it is at a glance, in the same spot
-// every other run already uses to say so.
+// to show. A setup run — `repo install`, `repo setup`, `repo deploy --setup` —
+// carries no ref, since every checkout runs on the branch it is already on, and
+// that slot is exactly where a routine push would name its branch. Left blank
+// it reads identically to an ordinary push; filled with "setup", it reads as
+// what it is at a glance, in the same spot every other run uses to say so.
 func branchLabel(s Summary) string {
 	if branch := strings.TrimPrefix(s.Ref, "refs/heads/"); branch != "" {
 		return branch
@@ -75,37 +66,21 @@ func branchLabel(s Summary) string {
 	return ""
 }
 
-// needsSetupNote reports whether a setup run needs its own "setup" marker
-// outside the branch slot. branchLabel already answers for a refless setup
-// run — repo@setup, in the exact spot a routine push would name its branch —
-// but `repo setup <repo> --branch <b>` sends a repository_dispatch that
-// targets one branch of a fleet, and that branch is real information the
-// slot must keep. A setup run has to read as one whatever its ref, so when
-// there is a real branch to show, every renderer marks the run's own
-// title/verdict word instead of crowding the branch it must not replace.
-func needsSetupNote(s Summary) bool {
-	return s.Pipeline == "setup" && strings.TrimPrefix(s.Ref, "refs/heads/") != ""
-}
-
 // Render builds the plain-text body every channel sends.
 func Render(s Summary) string {
 	var b strings.Builder
 
 	b.WriteString(Subject(s) + "\n")
 
+	// Only a push carries a commit, and it always carries one — the handler
+	// refuses a payload without a sha. A setup run started on the server has no
+	// author to name either: whoever ran it was at the terminal.
 	if s.SHA != "" {
 		b.WriteString("commit: " + short(s.SHA))
 		if s.Author != "" {
 			b.WriteString(" by " + s.Author)
 		}
 		b.WriteString("\n")
-	} else if s.Author != "" {
-		// No commit to hang the author off: a repository_dispatch carries none by
-		// design, and its author is the GitHub login of whoever sent it. That is
-		// the only record of who asked for a setup that ran unattended on every
-		// server registered on the repository, so it gets its own line rather than
-		// being dropped with the commit it does not have.
-		b.WriteString("requested by " + s.Author + "\n")
 	}
 	if s.Message != "" {
 		b.WriteString("message: " + firstLine(s.Message) + "\n")

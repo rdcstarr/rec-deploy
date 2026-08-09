@@ -192,9 +192,6 @@ func hookDrift(got github.Hook, want string) []string {
 	if !got.Active {
 		issues = append(issues, "the webhook is deactivated on github, so it delivers nothing")
 	}
-	if !got.Delivers("repository_dispatch") {
-		issues = append(issues, "github does not deliver `repository_dispatch` to this hook, so `rec-deploy repo setup` will not reach this server")
-	}
 
 	return issues
 }
