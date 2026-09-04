@@ -499,11 +499,20 @@ func removeRepo(ctx context.Context, slug string) error {
 // webhook and the deploy key on GitHub, the local private key, and the store
 // row. No UI happens here — `repo remove` and `uninstall` wrap it with their
 // own interaction.
+//
+// A 404 from either GitHub call is the outcome asked for, so it is not an
+// error. The case that made this is the whole repository being deleted on
+// GitHub: the hook and the key went with it, and treating the 404 as a failure
+// left the registration stranded here — `repo remove` could never succeed, and
+// `repo list` kept showing a repository that no longer exists anywhere, with no
+// command able to forget it. `ErrNotFound` exists for exactly this reading, and
+// the two Delete calls have carried tests asserting they return it since the
+// day the sentinel was added.
 func deleteRepoArtifacts(ctx context.Context, st *store.Store, client *github.Client, repo store.Repo) error {
-	if err := client.DeleteHook(ctx, repo.Repository, repo.GitHubHookID); err != nil {
+	if err := client.DeleteHook(ctx, repo.Repository, repo.GitHubHookID); err != nil && !errors.Is(err, github.ErrNotFound) {
 		return fmt.Errorf("delete webhook: %w", err)
 	}
-	if err := client.DeleteDeployKey(ctx, repo.Repository, repo.GitHubKeyID); err != nil {
+	if err := client.DeleteDeployKey(ctx, repo.Repository, repo.GitHubKeyID); err != nil && !errors.Is(err, github.ErrNotFound) {
 		return fmt.Errorf("delete deploy key: %w", err)
 	}
 
