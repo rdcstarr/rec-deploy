@@ -3,11 +3,9 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -18,7 +16,6 @@ import (
 	"github.com/rdcstarr/rec-deploy/internal/cli"
 	"github.com/rdcstarr/rec-deploy/internal/config"
 	"github.com/rdcstarr/rec-deploy/internal/deploy"
-	"github.com/rdcstarr/rec-deploy/internal/mcpserver"
 	"github.com/rdcstarr/rec-deploy/internal/notify"
 	"github.com/rdcstarr/rec-deploy/internal/server"
 	"github.com/rdcstarr/rec-deploy/internal/sshkey"
@@ -131,45 +128,7 @@ func newServeCmd() *cobra.Command {
 					})
 				},
 			}
-			if !cfg.MCP.Enabled || cfg.MCP.Mode == "cloudflare" {
-				return server.ListenAndServe(ctx, opts)
-			}
-			if cfg.MCP.TokenHash == "" {
-				return fmt.Errorf("remote MCP is enabled without a token — run `rec-deploy mcp token rotate`")
-			}
-
-			mcpHTTP := &http.Server{
-				Addr:              cfg.MCP.Listen,
-				Handler:           mcpserver.New(cfg, st).HTTPHandler(cfg.MCP.TokenHash),
-				ReadHeaderTimeout: 10 * time.Second,
-			}
-			serveCtx, cancelServe := context.WithCancel(ctx)
-			defer cancelServe()
-			mcpErrors := make(chan error, 1)
-			go func() { mcpErrors <- mcpHTTP.ListenAndServe() }()
-			slog.Info("remote MCP listening", "addr", cfg.MCP.Listen)
-
-			webhookErrors := make(chan error, 1)
-			go func() { webhookErrors <- server.ListenAndServe(serveCtx, opts) }()
-			select {
-			case err := <-mcpErrors:
-				cancelServe()
-				<-webhookErrors
-				if errors.Is(err, http.ErrServerClosed) {
-					return nil
-				}
-				return fmt.Errorf("MCP listen on %s: %w", cfg.MCP.Listen, err)
-			case err := <-webhookErrors:
-				shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-				defer cancel()
-				_ = mcpHTTP.Shutdown(shutdown)
-				return err
-			case <-ctx.Done():
-				shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-				defer cancel()
-				_ = mcpHTTP.Shutdown(shutdown)
-				return <-webhookErrors
-			}
+			return server.ListenAndServe(ctx, opts)
 		},
 	}
 

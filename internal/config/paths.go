@@ -57,24 +57,6 @@ func StateDir() (string, error) {
 // StateDB returns the path to the SQLite state database.
 func StateDB() (string, error) { return underState("state.db") }
 
-// MCPDir returns the root-only directory holding Cloudflare Tunnel runtime
-// state and its verified helper binary.
-func MCPDir() (string, error) { return underState("mcp") }
-
-// CloudflaredBinary returns the root-owned helper location. It sits outside the
-// secret state directory so a systemd DynamicUser can execute it without being
-// able to traverse or read the rest of rec-deploy's state.
-func CloudflaredBinary() (string, error) {
-	if isRoot() {
-		return "/usr/local/lib/rec-deploy/cloudflared", nil
-	}
-	dir, err := MCPDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "bin", "cloudflared"), nil
-}
-
 // KeysDir returns the root-only directory holding the ed25519 deploy keys.
 func KeysDir() (string, error) { return underState("keys") }
 

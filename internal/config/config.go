@@ -23,35 +23,10 @@ type Config struct {
 	Discovery DiscoveryConfig `mapstructure:"discovery"`
 	// Notify configures where deploy summaries are sent.
 	Notify NotifyConfig `mapstructure:"notify"`
-	// MCP configures the optional remote read-only MCP endpoint.
-	MCP MCPConfig `mapstructure:"mcp"`
 	// Initialized records that the init wizard ran every step without error. It
 	// is what tells the interactive hub to stop offering setup on a server that
 	// has already been set up.
 	Initialized bool `mapstructure:"initialized"`
-}
-
-// MCPConfig configures the remote read-only MCP endpoint.
-type MCPConfig struct {
-	Enabled    bool             `mapstructure:"enabled"`
-	Listen     string           `mapstructure:"listen"`
-	TokenHash  string           `mapstructure:"token_hash"`
-	Mode       string           `mapstructure:"mode"`
-	PublicURL  string           `mapstructure:"public_url"`
-	Cloudflare CloudflareConfig `mapstructure:"cloudflare"`
-}
-
-// CloudflareConfig holds the root-only provisioning credentials and identifies
-// the Cloudflare resources owned by this server.
-type CloudflareConfig struct {
-	AccountID   string `mapstructure:"account_id"`
-	APIToken    string `mapstructure:"api_token"`
-	ZoneID      string `mapstructure:"zone_id"`
-	ZoneName    string `mapstructure:"zone_name"`
-	Hostname    string `mapstructure:"hostname"`
-	TunnelID    string `mapstructure:"tunnel_id"`
-	TunnelName  string `mapstructure:"tunnel_name"`
-	DNSRecordID string `mapstructure:"dns_record_id"`
 }
 
 // GitHubConfig holds the GitHub API credentials.
@@ -116,7 +91,6 @@ func Load(file string) (*Config, error) {
 	v.SetDefault("listen", "0.0.0.0:9000")
 	v.SetDefault("discovery.roots", []string{"/home/*/web/*/public_html", "/var/www"})
 	v.SetDefault("discovery.prune", []string{"node_modules", "vendor", "uploads", "cache"})
-	v.SetDefault("mcp.listen", "0.0.0.0:8765")
 
 	v.SetEnvPrefix("REC_DEPLOY")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -169,16 +143,28 @@ func Save(path string, cfg *Config) error {
 		return err
 	}
 
-	v := viper.New()
-	v.SetConfigFile(path)
-	v.SetConfigPermissions(0o600) // create the file owner-only — it holds secrets
-
-	// Load existing content so sibling keys survive; absence is fine.
-	if err := v.ReadInConfig(); err != nil {
+	// Load existing content so sibling keys survive; absence is fine. Viper cannot
+	// unset a key, so it is read into a throwaway instance and the writer is
+	// seeded without the mcp section a former release left behind — that section
+	// can hold a Cloudflare API token, which must not be carried forward. Every
+	// other key survives, known or not, so an older binary rolled back to keeps
+	// what a newer one saved.
+	existing := viper.New()
+	existing.SetConfigFile(path)
+	if err := existing.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError
 		if !errors.As(err, &notFound) && !os.IsNotExist(err) {
 			return err
 		}
+	}
+	settings := existing.AllSettings()
+	delete(settings, "mcp")
+
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigPermissions(0o600) // create the file owner-only — it holds secrets
+	if err := v.MergeConfigMap(settings); err != nil {
+		return err
 	}
 
 	v.Set("listen", cfg.Listen)
@@ -193,19 +179,6 @@ func Save(path string, cfg *Config) error {
 	v.Set("notify.email.to", cfg.Notify.Email.To)
 	v.Set("notify.email.username", cfg.Notify.Email.Username)
 	v.Set("notify.email.password", cfg.Notify.Email.Password)
-	v.Set("mcp.enabled", cfg.MCP.Enabled)
-	v.Set("mcp.listen", cfg.MCP.Listen)
-	v.Set("mcp.token_hash", cfg.MCP.TokenHash)
-	v.Set("mcp.mode", cfg.MCP.Mode)
-	v.Set("mcp.public_url", cfg.MCP.PublicURL)
-	v.Set("mcp.cloudflare.account_id", cfg.MCP.Cloudflare.AccountID)
-	v.Set("mcp.cloudflare.api_token", cfg.MCP.Cloudflare.APIToken)
-	v.Set("mcp.cloudflare.zone_id", cfg.MCP.Cloudflare.ZoneID)
-	v.Set("mcp.cloudflare.zone_name", cfg.MCP.Cloudflare.ZoneName)
-	v.Set("mcp.cloudflare.hostname", cfg.MCP.Cloudflare.Hostname)
-	v.Set("mcp.cloudflare.tunnel_id", cfg.MCP.Cloudflare.TunnelID)
-	v.Set("mcp.cloudflare.tunnel_name", cfg.MCP.Cloudflare.TunnelName)
-	v.Set("mcp.cloudflare.dns_record_id", cfg.MCP.Cloudflare.DNSRecordID)
 	v.Set("initialized", cfg.Initialized)
 
 	if err := v.WriteConfigAs(path); err != nil {

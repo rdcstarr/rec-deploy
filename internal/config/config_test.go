@@ -22,9 +22,6 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.Discovery.Roots) != 2 {
 		t.Errorf("Roots = %v, want 2 defaults", cfg.Discovery.Roots)
 	}
-	if cfg.MCP.Listen != "0.0.0.0:8765" || cfg.MCP.Enabled {
-		t.Errorf("MCP = %+v, want disabled on 0.0.0.0:8765", cfg.MCP)
-	}
 }
 
 func TestLoadMalformedIsAnError(t *testing.T) {
@@ -47,7 +44,6 @@ func TestSaveRoundTripAndPermissions(t *testing.T) {
 		GitHub:    GitHubConfig{Token: "ghp_secret"},
 		Discovery: DiscoveryConfig{Roots: []string{"/var/www"}, Prune: []string{"vendor"}},
 		Notify:    NotifyConfig{Telegram: TelegramConfig{Token: "t", ChatID: "42"}},
-		MCP:       MCPConfig{Enabled: true, Listen: "127.0.0.1:8765", TokenHash: "digest", Mode: "cloudflare", PublicURL: "https://mcp.example.com/mcp", Cloudflare: CloudflareConfig{AccountID: "a", APIToken: "cf_secret", ZoneID: "z", Hostname: "mcp.example.com", TunnelID: "t", DNSRecordID: "d"}},
 	}
 	if err := Save(path, cfg); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -74,15 +70,6 @@ func TestSaveRoundTripAndPermissions(t *testing.T) {
 	if got.Notify.Telegram.ChatID != "42" {
 		t.Errorf("ChatID = %q, want 42", got.Notify.Telegram.ChatID)
 	}
-	if !got.MCP.Enabled || got.MCP.Listen != "127.0.0.1:8765" || got.MCP.TokenHash != "digest" {
-		t.Errorf("MCP round trip = %+v", got.MCP)
-	}
-	if got.MCP.Mode != "cloudflare" || got.MCP.Cloudflare.TunnelID != "t" || got.MCP.PublicURL != "https://mcp.example.com/mcp" {
-		t.Errorf("Cloudflare MCP round trip = %+v", got.MCP)
-	}
-	if got.MCP.Cloudflare.APIToken != "cf_secret" {
-		t.Error("Cloudflare API token was not preserved")
-	}
 }
 
 // TestSavePreservesUnmanagedKeys guards the Save contract: a key rec-deploy does not
@@ -108,6 +95,47 @@ func TestSavePreservesUnmanagedKeys(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "custom_key") {
 		t.Errorf("Save dropped the unmanaged key: %s", data)
+	}
+}
+
+// TestSaveDropsALeftoverMCPSection: the mcp section of a former release can hold a
+// Cloudflare API token, so a save must not carry it forward, while a key this
+// binary has never heard of still survives. Both files must keep loading.
+func TestSaveDropsALeftoverMCPSection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	leftover := "listen: 0.0.0.0:1\n" +
+		"mcp:\n  enabled: true\n  mode: cloudflare\n  token_hash: digest\n  cloudflare:\n    api_token: cf_secret\n" +
+		"future:\n  flag: true\n"
+	if err := os.WriteFile(path, []byte(leftover), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load of a config with a leftover mcp section: %v", err)
+	}
+	cfg.Listen = "0.0.0.0:2"
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(data), "mcp") || strings.Contains(string(data), "cf_secret") {
+		t.Errorf("Save kept the leftover mcp section: %s", data)
+	}
+	if !strings.Contains(string(data), "future") {
+		t.Errorf("Save dropped an unmanaged key: %s", data)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after Save: %v", err)
+	}
+	if got.Listen != "0.0.0.0:2" {
+		t.Errorf("Listen = %q, want 0.0.0.0:2 — every current setting is still written", got.Listen)
 	}
 }
 

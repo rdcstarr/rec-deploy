@@ -9,9 +9,9 @@ import (
 )
 
 func TestDetailViewRendersOneBreadcrumbAndRows(t *testing.T) {
-	m := detailModel{Detail: Detail{Title: "rec-deploy / MCP / Status", Rows: [][2]string{{"remote", "off"}}}, width: 80}
+	m := detailModel{Detail: Detail{Title: "rec-deploy / Status", Rows: [][2]string{{"daemon", "off"}}}, width: 80}
 	view := m.View().Content
-	if strings.Count(view, "rec-deploy / MCP / Status") != 1 || !strings.Contains(view, "remote") || !strings.Contains(view, "off") {
+	if strings.Count(view, "rec-deploy / Status") != 1 || !strings.Contains(view, "daemon") || !strings.Contains(view, "off") {
 		t.Errorf("unexpected detail view:\n%s", view)
 	}
 }
@@ -31,26 +31,6 @@ func TestDetailNavigation(t *testing.T) {
 	}
 }
 
-// A read-only view still has to be able to act on what it reports — the status
-// screen that knows the endpoint is unreachable is the one that must restart it.
-func TestDetailActionKeysExitWithTheKey(t *testing.T) {
-	d := Detail{Keys: []Key{{Key: "s", Help: "restart service"}}}
-
-	model, cmd := (detailModel{Detail: d}).Update(keyPress("s"))
-	if cmd == nil || model.(detailModel).key != "s" || !model.(detailModel).closing {
-		t.Errorf("s did not exit as an action key: %+v", model)
-	}
-
-	// An unbound key is inert, and h stays the help toggle.
-	model, cmd = (detailModel{Detail: d}).Update(keyPress("x"))
-	if cmd != nil || model.(detailModel).key != "" {
-		t.Error("an unbound key exited the view")
-	}
-	if view := (detailModel{Detail: d}).View().Content; !strings.Contains(view, "s restart service") {
-		t.Errorf("the footer does not advertise the action key:\n%s", view)
-	}
-}
-
 // detailRows builds n labelled rows for the windowing tests below.
 func detailRows(n int) [][2]string {
 	rows := make([][2]string, n)
@@ -62,14 +42,12 @@ func detailRows(n int) [][2]string {
 }
 
 // TestDetailScrolls pins that a detail view with more rows than the terminal
-// shows a window the arrow, page and home/end keys move, that the footer says
-// so, and that an action key still exits with its key while the view is
-// scrolled — a read-only screen that can act on what it reports must keep doing
-// so once it is long enough to page.
+// shows a window the arrow, page and home/end keys move, and that the footer says
+// so.
 func TestDetailScrolls(t *testing.T) {
 	SetColor(false)
 
-	d := Detail{Title: "status", Rows: detailRows(60), Keys: []Key{{Key: "s", Help: "restart service"}}}
+	d := Detail{Title: "status", Rows: detailRows(60)}
 	var m tea.Model = detailModel{Detail: d}
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
 
@@ -82,9 +60,6 @@ func TestDetailScrolls(t *testing.T) {
 	}
 	if !strings.Contains(view, "↑/↓ scroll") {
 		t.Errorf("a windowed detail view does not advertise that it scrolls:\n%s", view)
-	}
-	if !strings.Contains(view, "s restart service") {
-		t.Errorf("windowing dropped the action key from the footer:\n%s", view)
 	}
 
 	// A page moves by exactly what PgDn moves, so space must land identically —
@@ -106,12 +81,6 @@ func TestDetailScrolls(t *testing.T) {
 	if home, _ := ended.Update(keyPress("g")); home.(detailModel).top != 0 {
 		t.Error("g did not return to the first row")
 	}
-
-	// Scrolling must not cost the view its reason to exist: the action keys.
-	acted, cmd := ended.Update(keyPress("s"))
-	if cmd == nil || acted.(detailModel).key != "s" || !acted.(detailModel).closing {
-		t.Errorf("s stopped acting once the view scrolled: %+v", acted)
-	}
 }
 
 // TestDetailUnsizedRendersUnchanged pins that a view that has never received a
@@ -121,7 +90,7 @@ func TestDetailScrolls(t *testing.T) {
 func TestDetailUnsizedRendersUnchanged(t *testing.T) {
 	SetColor(false)
 
-	d := Detail{Title: "status", Rows: [][2]string{{"access", "off"}}, Keys: []Key{{Key: "s", Help: "restart service"}}}
+	d := Detail{Title: "status", Rows: [][2]string{{"access", "off"}}}
 
 	closed := detailModel{Detail: d, width: 80}
 	want := render(StyleTitle, "status") + "\n\n" + TwoColWidth(d.Rows, 80) +
@@ -146,7 +115,7 @@ func TestDetailUnsizedRendersUnchanged(t *testing.T) {
 // and the screen buffer can never match again — so the renderer repaints an
 // identical screen at full framerate with no input at all. Measured on a 16-row
 // pty before this pin: 180 full-screen clears and 160KB written in three idle
-// seconds on `rec-deploy mcp status` with help open; after it, zero.
+// seconds on a detail view with help open; after it, zero.
 //
 // The caller's help is swept too, because cmd/help.go hands ui.Detail a whole
 // command's help: a block taller than the terminal cannot be compensated for by

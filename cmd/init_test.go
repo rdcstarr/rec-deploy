@@ -115,17 +115,3 @@ func TestInitializedIsNilSafe(t *testing.T) {
 		t.Error("a config with the flag set must read as initialized")
 	}
 }
-
-// TestInitMCPSkipsAnEnabledEndpoint pins the re-run repair: install.sh runs init
-// on upgrades too, and enableCloudflareMCP errors on an endpoint that already
-// exists. A step error abandons every step after it, which used to take
-// notifications, auto-update and the summary with it.
-func TestInitMCPSkipsAnEnabledEndpoint(t *testing.T) {
-	saved := cfg
-	defer func() { cfg = saved }()
-
-	cfg = &config.Config{MCP: config.MCPConfig{Enabled: true, Mode: "cloudflare", PublicURL: "https://mcp.example.com/mcp"}}
-	if err := initMCP(context.Background(), cfg); err != nil {
-		t.Fatalf("initMCP must not fail on an already-enabled endpoint: %v", err)
-	}
-}

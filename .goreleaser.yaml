@@ -86,14 +86,6 @@ nfpms:
       # besides.
       - src: internal/units/files/rec-deploy.service
         dst: /lib/systemd/system/rec-deploy.service
-      - src: internal/units/files/rec-deploy-mcp.service
-        dst: /lib/systemd/system/rec-deploy-mcp.service
-      - src: internal/units/files/rec-deploy-mcp-tunnel.service
-        dst: /lib/systemd/system/rec-deploy-mcp-tunnel.service
-      - src: internal/units/files/rec-deploy-mcp-update.service
-        dst: /lib/systemd/system/rec-deploy-mcp-update.service
-      - src: internal/units/files/rec-deploy-mcp-update.timer
-        dst: /lib/systemd/system/rec-deploy-mcp-update.timer
 
       # The updater. Installed but NOT enabled: a root daemon that replaces its
       # own binary unattended is the operator's decision, and `rec-deploy init`

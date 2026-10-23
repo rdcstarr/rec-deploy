@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/rdcstarr/rec-deploy/internal/systemd"
@@ -115,7 +116,17 @@ var (
 // disableUnits are the units that can be enabled and must therefore be
 // stopped and disabled; rec-deploy-update.service is oneshot-only and has no
 // enablement state of its own.
-var disableUnits = []string{"rec-deploy.service", "rec-deploy-mcp.service", "rec-deploy-mcp-tunnel.service", "rec-deploy-mcp-update.timer", "rec-deploy-update.timer"}
+var disableUnits = []string{"rec-deploy.service", "rec-deploy-update.timer"}
+
+// legacyUnits are the units a release with remote MCP installed. Self-update
+// replaces only the binary, so a box that updated itself still has them, enabled
+// or not; a box installed afterwards never had them, so they get a step only
+// when something is actually there.
+var legacyUnits = []string{"rec-deploy-mcp.service", "rec-deploy-mcp-tunnel.service", "rec-deploy-mcp-update.service", "rec-deploy-mcp-update.timer"}
+
+// legacyDir is where that release downloaded the cloudflared helper. It is a
+// variable so tests can point it at a scratch directory.
+var legacyDir = "/usr/local/lib/rec-deploy"
 
 // Run removes the local installation per opts and accounts for every target.
 // It never aborts midway: a failed step is recorded and the remaining targets
@@ -156,6 +167,17 @@ func (r *Report) services(ctx context.Context, opts Options) {
 		}
 		r.Steps = append(r.Steps, Step{Phase: PhaseServices, Target: unit, Outcome: OutcomeRemoved, Detail: "stopped and disabled"})
 	}
+
+	for _, unit := range legacyUnits {
+		if !unitEnabled(ctx, unit) && !unitActive(ctx, unit) {
+			continue
+		}
+		if err := disableNow(ctx, unit); err != nil {
+			r.Steps = append(r.Steps, Step{Phase: PhaseServices, Target: unit, Outcome: OutcomeFailed, Detail: err.Error()})
+			continue
+		}
+		r.Steps = append(r.Steps, Step{Phase: PhaseServices, Target: unit, Outcome: OutcomeRemoved, Detail: "stopped and disabled"})
+	}
 }
 
 // unitFiles removes the unit files and reloads systemd, deferring only the ones
@@ -171,10 +193,18 @@ func (r *Report) services(ctx context.Context, opts Options) {
 //
 // A mixed install is the ordinary case that exposes it: a .deb for the binary and
 // install.sh for the units, or the reverse.
+//
+// legacyUnits go through the same loop, but only the ones present: a box that
+// never had them gets no line about them.
 func (r *Report) unitFiles(ctx context.Context, opts Options) {
 	removed := false
-	for _, unit := range opts.Units {
+	for _, unit := range append(slices.Clone(opts.Units), legacyUnits...) {
 		path := filepath.Join(opts.UnitsDir, unit)
+		if slices.Contains(legacyUnits, unit) {
+			if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+		}
 		if owner := packageOwner(ctx, path); owner != "" {
 			r.Steps = append(r.Steps, Step{Phase: PhaseUnitFiles, Target: path, Outcome: OutcomeDeferred, Detail: "owned by " + owner + " — removed by the package manager"})
 			continue
@@ -219,7 +249,18 @@ func (r *Report) data(opts Options) {
 
 // binary removes the executable last, so everything above ran from a binary
 // that still existed. Package-owned binaries are the package manager's job.
+//
+// legacyDir goes first and whatever KeepData says: it holds a program that
+// rec-deploy downloaded itself, not data, and no package owns it.
 func (r *Report) binary(opts Options) {
+	if _, err := os.Stat(legacyDir); !errors.Is(err, os.ErrNotExist) {
+		if err := os.RemoveAll(legacyDir); err != nil {
+			r.Steps = append(r.Steps, Step{Phase: PhaseBinary, Target: legacyDir, Outcome: OutcomeFailed, Detail: err.Error()})
+		} else {
+			r.Steps = append(r.Steps, Step{Phase: PhaseBinary, Target: legacyDir, Outcome: OutcomeRemoved})
+		}
+	}
+
 	if r.Package != "" {
 		r.Steps = append(r.Steps, Step{
 			Phase:   PhaseBinary,

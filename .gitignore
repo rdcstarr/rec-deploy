@@ -17,6 +17,7 @@ coverage.*
 # of the repo
 /docs/
 /.superpowers/
+/openspec/
 
 # OS / editor cruft
 .DS_Store

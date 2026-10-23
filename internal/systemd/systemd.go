@@ -49,8 +49,6 @@ func IsEnabled(ctx context.Context, unit string) bool {
 // Load states worth naming. systemd has more, but these are the ones that change
 // what an operator must do next.
 const (
-	// LoadNotFound means no unit file of that name exists.
-	LoadNotFound = "not-found"
 	// LoadMasked means the unit is symlinked to /dev/null and cannot be started or
 	// enabled until it is unmasked.
 	LoadMasked = "masked"

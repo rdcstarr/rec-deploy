@@ -249,7 +249,7 @@ func TestDescriptionIsRendered(t *testing.T) {
 // depends on — Prompt, SecretPrompt, Confirm all map this: Esc sets navBack
 // (which becomes ui.ErrBack, a back-out) while Ctrl+C sets navQuit (ui.ErrQuit).
 // Collapsing the two, or treating an Esc as a failure, is what let the uninstall
-// Cloudflare prompt count a deliberate back-out as a cleanup failure and leak the
+// credentials prompt count a deliberate back-out as a failure and leak the
 // "rec-deploy: back one level" sentinel into a warning.
 func TestFormBackOutIsDistinctFromQuit(t *testing.T) {
 	form := func() *huh.Form {

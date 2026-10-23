@@ -124,11 +124,10 @@ func TestDocumentPreservesPreformattedBody(t *testing.T) {
 }
 
 // TestRunWizardSurvivesAnOptionalStepFailure is the rule that a failing extra
-// must not abandon setup. A Cloudflare MCP step that could not provision took
-// notifications, auto-update and the summary down with it, and made the wizard
-// exit non-zero — which is what an installer reads to decide whether to enable
-// the daemon at all, so one optional feature failing left the server not
-// running.
+// must not abandon setup. An optional step that failed would otherwise take the
+// steps after it down with it, and make the wizard exit non-zero — which is what
+// an installer reads to decide whether to enable the daemon at all, so one
+// optional feature failing would leave the server not running.
 func TestRunWizardSurvivesAnOptionalStepFailure(t *testing.T) {
 	SetColor(false)
 	t.Cleanup(func() { SetColor(true) })

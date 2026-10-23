@@ -69,15 +69,7 @@ func initWizard(ctx context.Context) error {
 		}},
 		ui.WizardStep{Name: "Server", Run: func() error { return initServer(cfg) }},
 		ui.WizardStep{Name: "Discovery", Run: func() error { return initDiscovery(cfg) }},
-		// MCP needs the database before its service can start, and belongs before
-		// optional notifications and updates in the operator-facing flow.
 		ui.WizardStep{Name: "Database and host keys", Run: func() error { return initState(ctx) }},
-		// Both are extras: nothing about the daemon or a deploy depends on
-		// either, so neither may take the wizard down with it. A failed MCP
-		// provisioning used to do exactly that — abandoning notifications,
-		// auto-update and the summary, and making init exit non-zero, which is
-		// how install.sh decides whether to enable and start the daemon at all.
-		ui.WizardStep{Name: "Remote MCP", Optional: true, Run: func() error { return initMCP(ctx, cfg) }},
 		ui.WizardStep{Name: "Notifications", Optional: true, Run: func() error { return initNotify(ctx) }},
 		ui.WizardStep{
 			Name: "Auto-update",
@@ -101,31 +93,6 @@ func initWizard(ctx context.Context) error {
 	}
 
 	return initSummary(login)
-}
-
-// initMCP optionally enables the daemon's authenticated remote MCP listener. It
-// is a no-op on a server that already has one: install.sh runs init on upgrades
-// too, and enableCloudflareMCP refuses to provision a replacement — an error
-// there would abandon notifications, auto-update and the summary with it.
-// Changing an existing endpoint is what `rec-deploy mcp` is for.
-func initMCP(ctx context.Context, cfg *config.Config) error {
-	if cfg.MCP.Enabled {
-		ui.Info("remote MCP is already enabled at " + mcpEndpoint(cfg) + " — change it with `rec-deploy mcp`")
-
-		return nil
-	}
-
-	on, err := ui.Confirm("Enable remote read-only MCP access?", "Creates an isolated Cloudflare Tunnel with public HTTPS. Hestia, Nginx, Apache and the firewall are not modified.")
-	if err != nil {
-		return err
-	}
-	if !on {
-		ui.Info("remote MCP is off — enable it later with `rec-deploy mcp enable`")
-
-		return nil
-	}
-
-	return enableCloudflareMCP(ctx, false)
 }
 
 // initToken reads the GitHub token, validates it against GET /user, and refuses

@@ -78,7 +78,7 @@ func TestReportLinesKeepAFailureAlignedAndMarked(t *testing.T) {
 
 	lines := reportLines(uninstall.Report{Steps: []uninstall.Step{
 		{Phase: uninstall.PhaseServices, Target: "rec-deploy.service", Outcome: uninstall.OutcomeRemoved},
-		{Phase: uninstall.PhaseServices, Target: "rec-deploy-mcp.service", Outcome: uninstall.OutcomeFailed, Detail: "unit is masked"},
+		{Phase: uninstall.PhaseServices, Target: "rec-deploy-update.timer", Outcome: uninstall.OutcomeFailed, Detail: "unit is masked"},
 	}})
 
 	failed := lines[len(lines)-1]
@@ -88,7 +88,7 @@ func TestReportLinesKeepAFailureAlignedAndMarked(t *testing.T) {
 	if !strings.Contains(failed, "unit is masked") {
 		t.Errorf("a failed step = %q, want its detail verbatim", failed)
 	}
-	if column := strings.Index(failed, "rec-deploy-mcp.service"); column != 4 {
+	if column := strings.Index(failed, "rec-deploy-update.timer"); column != 4 {
 		t.Errorf("a failed step's text starts at column %d, want 4 like the lines above it", column)
 	}
 }
@@ -121,14 +121,12 @@ func TestReportLinesNeverDropAStep(t *testing.T) {
 // binary still go.
 func TestUninstallStepCountSkipsThePhasesTheRunWillNotTake(t *testing.T) {
 	tests := []struct {
-		name                   string
-		doGitHub, doCloudflare bool
-		want                   int
+		name     string
+		doGitHub bool
+		want     int
 	}{
-		{"nothing remote to clean", false, false, 1},
-		{"github only", true, false, 2},
-		{"cloudflare only", false, true, 2},
-		{"both", true, true, 3},
+		{"nothing remote to clean", false, 1},
+		{"github", true, 2},
 	}
 
 	for _, tt := range tests {
@@ -136,9 +134,9 @@ func TestUninstallStepCountSkipsThePhasesTheRunWillNotTake(t *testing.T) {
 			// The expression under test is the one runUninstall builds the
 			// stepper with; keeping it here in the same shape is what makes a
 			// change to it fail this test.
-			got := 1 + boolToInt(tt.doGitHub) + boolToInt(tt.doCloudflare)
+			got := 1 + boolToInt(tt.doGitHub)
 			if got != tt.want {
-				t.Errorf("step count for github=%v cloudflare=%v = %d, want %d", tt.doGitHub, tt.doCloudflare, got, tt.want)
+				t.Errorf("step count for github=%v = %d, want %d", tt.doGitHub, got, tt.want)
 			}
 		})
 	}

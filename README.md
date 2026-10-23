@@ -47,9 +47,9 @@ Prefer a package? Grab one from the
 [releases](https://github.com/rdcstarr/rec-deploy/releases). The `.deb` / `.rpm` install
 the binary to `/usr/bin/rec-deploy`, drop the systemd unit, and create `/etc/rec-deploy` and
 `/var/lib/rec-deploy` (both `0700` — they hold the GitHub token, the HMAC secrets and the
-deploy keys). Upgrading a package `try-restart`s whatever is already running — the daemon
-and, when it runs as its own unit, the MCP origin — because replacing the file on disk
-does not move a live process onto it. A unit you deliberately stopped stays stopped.
+deploy keys). Upgrading a package `try-restart`s the daemon if it is running, because
+replacing the file on disk does not move a live process onto it. A unit you deliberately
+stopped stays stopped.
 
 ```sh
 # Debian / Ubuntu
@@ -74,6 +74,14 @@ self-update` upgrades in place: it checks the digest against that same `checksum
 
 The binary never deploys itself. It is a deploy target for nothing; upgrades come only
 from a signed release, never from a `git reset --hard` under a running job.
+
+### Upgrading from a release with remote MCP
+
+Releases up to v0.16 shipped an optional remote MCP endpoint behind a Cloudflare Tunnel. Before
+upgrading a server that enabled it, run `sudo rec-deploy mcp disable` in a terminal: it deletes
+the tunnel and its DNS record from Cloudflare. A server that already upgraded keeps both, so
+delete them in the Cloudflare dashboard. Either way, revoke the Cloudflare API token created
+for it. Re-running the installer removes the leftover units and files.
 
 ## Setup
 
@@ -100,9 +108,9 @@ at startup, need `systemctl restart rec-deploy`. When in doubt,
 
 ### Setup walkthrough
 
-The wizard runs as numbered steps — `[1/7] GitHub`, `[2/7] Server` and so on —
+The wizard runs as numbered steps — `[1/6] GitHub`, `[2/6] Server` and so on —
 and each one leaves behind only its result. A host without systemd has no update
-timer to enable, so it runs six steps and is numbered accordingly. Answers are
+timer to enable, so it runs five steps and is numbered accordingly. Answers are
 saved as each step completes, so a wizard abandoned halfway keeps what it already
 collected.
 
@@ -120,28 +128,7 @@ repositories, e.g. `/home/*/web,/var/www`. Empty keeps the current roots.
 **[4] State** — no question: it creates the state database and pins github.com's
 SSH host keys so the first push does not race to build them.
 
-**[5] Remote MCP** — optional read-only access for AI clients over an isolated
-Cloudflare Tunnel. Declining leaves it off; `rec-deploy mcp` enables it later.
-The step confirms in one line rather than opening the readiness screen — that
-belongs to `rec-deploy mcp enable`, which was asked for MCP specifically. The
-bearer token is not lost with it: `rec-deploy mcp token` shows it any time.
-
-The subdomain is proposed as a fresh random name (`mcp-3f9a2b7c`), so
-reinstalling never collides with the endpoint a previous install published. To
-keep a URL your MCP clients are already configured with, type that subdomain
-instead — rec-deploy then finds the existing DNS record, tells you what it
-currently points at, and asks before replacing it. Replacing repoints the record
-at this install's new tunnel; the old tunnel is left in your Cloudflare account
-for you to delete. If provisioning fails after that point, the record goes back
-to the tunnel it was serving rather than being deleted.
-
-Remote MCP and notifications are **optional steps**: if one fails, it is reported
-and setup carries on to the steps after it. Only a required step ends the wizard,
-because `init`'s exit status is what `install.sh` reads to decide whether to
-enable and start the daemon — an extra that could not be provisioned must not
-leave the server stopped.
-
-**[6] Notifications** — Telegram and email are offered one at a time as yes/no
+**[5] Notifications** — Telegram and email are offered one at a time as yes/no
 questions, and answering yes drops straight into that channel's settings.
 Credentials are proved against the real service before they are written: the bot
 token and chat ID against the Telegram Bot API, the SMTP server by opening an
@@ -153,11 +140,15 @@ notification?" question any more — it existed because nothing else proved the
 credentials, and each channel now proves its own. `rec-deploy notifications test`
 delivers a real message whenever you want one.
 
-**[7] Auto-update** — opt-in systemd timer that checks releases hourly and swaps
-the binary after checksum verification, restarting the daemon. The MCP origin is
-restarted too when it runs as its own unit, and only once the daemon has proven
-healthy on the new release. Disable any time with `systemctl disable --now
-rec-deploy-update.timer`.
+Notifications are an **optional step**: if it fails, it is reported
+and setup carries on to the steps after it. Only a required step ends the wizard,
+because `init`'s exit status is what `install.sh` reads to decide whether to
+enable and start the daemon — an extra that could not be provisioned must not
+leave the server stopped.
+
+**[6] Auto-update** — opt-in systemd timer that checks releases hourly and swaps
+the binary after checksum verification, restarting the daemon. Disable any time with
+`systemctl disable --now rec-deploy-update.timer`.
 
 SMTP works on both transports: port `465` is the submissions port and is dialled
 with TLS from the first byte, while every other port starts in the clear and is
@@ -261,32 +252,32 @@ rec-deploy uninstall
 
 Interactively it shows what it found, then asks: whether to also delete the
 deploy keys and webhooks on GitHub for every registered repository (recommended
-— otherwise they stay there, pushing into a dead endpoint), whether to delete
-the Cloudflare tunnel and hostname behind remote MCP if one was provisioned, and
-whether to delete the local data (token, HMAC secrets, deploy keys, state
-database). Non-interactively it requires `--yes`, with `--keep-github`,
-`--keep-cloudflare` and `--keep-data` for the same choices.
+— otherwise they stay there, pushing into a dead endpoint), and whether to
+delete the local data (token, HMAC secrets, deploy keys, state database).
+Non-interactively it requires `--yes`, with `--keep-github` and `--keep-data` for the
+same choices.
 
-The removal then runs as numbered steps, the same way `init` does — `[1/3] GitHub`,
-`[2/3] Remote MCP`, `[3/3] Local system`. A phase the run will not take is not a step at
-all: on a server with no repositories registered and no Cloudflare tunnel, or with
-`--keep-github --keep-cloudflare`, it runs one step and is numbered accordingly. The local
+The removal then runs as numbered steps, the same way `init` does — `[1/2] GitHub`,
+`[2/2] Local system`. A phase the run will not take is not a step at
+all: on a server with no repositories registered, or with `--keep-github`, it runs one
+step and is numbered accordingly. The local
 step lists every target it touched, grouped under services, unit files, data and binary —
 nothing is summarised away, because on a destructive command that list is the only record
 of what was removed.
 
-Both remote cleanups run first, while the credentials and the stored IDs still
-exist; if either fails, uninstall stops before destroying the data they live in,
-because a tunnel or a webhook nobody can name is one nobody deletes. An endpoint
-authorized through the browser stored no Cloudflare API token, so a terminal is
-offered the chance to paste one — leaving it empty skips that cleanup and names
-the tunnel to remove in the dashboard.
+The GitHub cleanup runs first, while the token and the stored IDs still exist; if
+it fails, uninstall stops before destroying the data they live in, because a
+webhook nobody can name is one nobody deletes.
 
 Installs from a `.deb`/`.rpm` keep their binary and unit files — finish those
 with `dpkg -r rec-deploy` / `rpm -e rec-deploy`. The deployed checkouts on disk
 are never touched, and the GitHub token itself is not revoked: rec-deploy did
 not create it, so only its local copy is deleted — revoke it at
 <https://github.com/settings/tokens> if you want it gone.
+
+A server that ran a release up to v0.16 also gets the extra units and the
+`/usr/local/lib/rec-deploy` directory that release left behind removed, and listed
+in the report; a server that never had them sees no line about them.
 
 ## The manifest — `.rec-deploy.yml` or `.rec-deploy.yaml`
 
@@ -477,7 +468,7 @@ rec-deploy logs [owner/repo]            # deploy history
 rec-deploy notifications [test]         # channel settings; test probes one channel or all of them
 
 rec-deploy self-update                  # SHA-256 verified against checksums.txt; fails closed
-rec-deploy uninstall [--keep-github] [--keep-cloudflare] [--keep-data]   # removes services, local data, github keys/webhooks and the MCP tunnel
+rec-deploy uninstall [--keep-github] [--keep-data]   # removes services, local data, github keys/webhooks
 rec-deploy completion [bash|zsh|fish|powershell]
 rec-deploy version
 ```
@@ -492,11 +483,11 @@ install, a rotate, a status report is a thing you asked for, and drawing a menu 
 under its result would bury exactly what you came to read. A menu therefore exists only
 *before* a result, never after one: no screen asks "what next?" about a question it has
 already answered. Only navigation stays in the TUI — backing out of a screen (`Esc` / `←`)
-returns to the menu above it, and the group hubs (`repo`, `service`, `mcp`, and `repo config`
+returns to the menu above it, and the group hubs (`repo`, `service`, and `repo config`
 one level in) keep their menu open while you move between their own entries. Two screens are
 read-and-return by design, because there the screen *is* the result: the `logs` browser and the
-`config` section editor. Any blocking step — a GitHub API call, a host-key pin, a Cloudflare tunnel coming
-up, a test notification — shows a labelled spinner that names what it is waiting for and
+`config` section editor. Any blocking step — a GitHub API call, a host-key pin, a test
+notification — shows a labelled spinner that names what it is waiting for and
 clears when it is done, so a slow network call never looks like a freeze. A deploy is no
 exception: the git around it (`clone`, `fetch`, `reset`, `clean`) and the `post_deploy`
 pipeline both run quietly under spinners, and the terminal shows only the per-checkout
@@ -506,7 +497,7 @@ command, failed or not — the last several kilobytes, as `rec-deploy` records f
 step — stays in `rec-deploy logs`.
 
 The bare `rec-deploy` hub above is curated, not exhaustive: `repo`, `logs`, `status`,
-`service`, `notifications`, `mcp`, `self-update` and `uninstall`, plus `init` until the setup
+`service`, `notifications`, `self-update` and `uninstall`, plus `init` until the setup
 wizard has run to completion — every command above stays fully typable and listed in
 `--help` whether or not the hub shows it on its first screen. `repo`'s own menu works the
 same way one level in: `deploy`, `config`, `scan` and `rollback` sit beside `add`, `list`,
@@ -554,60 +545,6 @@ make snapshot   # local GoReleaser build, no publish
 Requires Go 1.26+. The authoritative design lives in
 `docs/superpowers/specs/2026-07-14-rec-deploy-cli-design.md`, which is kept outside
 version control — ask a maintainer for it.
-
-## MCP server
-
-`rec-deploy mcp` exposes this server's deployment state to MCP clients over
-stdio. The MCP surface is read-only: it can list repositories, installations
-and deploys, inspect one deploy, validate a discovered checkout's manifest and
-report service health. It cannot deploy, roll back or change configuration.
-
-Configure a local MCP client to launch the installed binary:
-
-```json
-{
-  "mcpServers": {
-    "rec-deploy": {
-      "command": "/usr/bin/rec-deploy",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-The process must run as a user that can read rec-deploy's state database and
-configured discovery roots. Repository webhook tokens and secrets, GitHub and
-notification credentials, GitHub delivery IDs, and captured command output are
-never returned by the MCP tools. Standard output is reserved for MCP protocol
-messages; diagnostics go to standard error.
-
-For an agent on another machine, enable the isolated Cloudflare Tunnel wizard:
-
-```bash
-sudo rec-deploy mcp enable
-rec-deploy mcp status
-```
-
-`mcp status` reports access mode, endpoint and service health in at most four lines; run
-in a terminal it is also where you act on them — rotate the token, restart the service, or
-re-check — rather than a readout you go elsewhere to fix.
-
-Choose a one-time Cloudflare Account API token (recommended) or browser login.
-Create the token under **Manage Account → Account API Tokens** with two policies:
-**Entire account → Cloudflare One Connector: cloudflared → Edit**, and
-**Specific domain → DNS → Edit + Zone → Read**. The wizard asks for the
-32-character Account ID from the account Overview, then the token. rec-deploy
-creates the tunnel and proxied DNS record, installs separate hardened services,
-selects a loopback-only origin port and verifies the public HTTPS endpoint. It
-does not change Hestia, Nginx, Apache, the host firewall or their ports.
-
-The API token or browser account certificate is discarded after provisioning.
-Only the tunnel-specific runtime credential remains root-only under
-`/var/lib/rec-deploy/mcp`. The MCP bearer token is written to a root-only
-provisioning file and only its SHA-256 digest is stored in configuration. Copy
-the token to the client, delete the provisioning file, and configure the public
-HTTPS URL with `Authorization: Bearer TOKEN`. Rotate a lost token with
-`rec-deploy mcp token rotate`; the MCP service must be restarted to apply it.
 
 ## License
 

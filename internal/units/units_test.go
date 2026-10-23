@@ -101,17 +101,6 @@ func TestTheServiceUnitStillBoundsItsStop(t *testing.T) {
 	}
 }
 
-func TestMCPServiceAllowsSQLiteCoordinationFiles(t *testing.T) {
-	got, err := Content("rec-deploy-mcp.service")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(got), "ProtectSystem=strict") ||
-		!strings.Contains(string(got), "ReadWritePaths=/var/lib/rec-deploy") {
-		t.Error("MCP unit cannot create SQLite WAL/SHM coordination files")
-	}
-}
-
 // TestStateDirectoryIsTraversableByDeployUsers pins the mode a deploy depends
 // on. systemd re-applies StateDirectoryMode on every start, so 0700 here does
 // not merely fail once — it takes /var/lib/rec-deploy back from under a running

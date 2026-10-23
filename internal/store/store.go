@@ -8,7 +8,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 
@@ -56,26 +55,6 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 
 		return nil, fmt.Errorf("migrate: %w", err)
-	}
-
-	return &Store{db: db}, nil
-}
-
-// OpenReadOnly opens an existing state database without creating files,
-// changing permissions, or applying migrations. It is for reporting surfaces
-// that promise not to modify the server, such as the MCP server.
-func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
-	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"}).String()
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite read-only: %w", err)
-	}
-	db.SetMaxOpenConns(1)
-
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-
-		return nil, fmt.Errorf("ping sqlite read-only: %w", err)
 	}
 
 	return &Store{db: db}, nil

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -25,7 +26,7 @@ func scaffold(t *testing.T) (opts Options, calls *[]string) {
 			t.Fatal(err)
 		}
 	}
-	units := []string{"rec-deploy.service", "rec-deploy-mcp.service", "rec-deploy-mcp-tunnel.service", "rec-deploy-mcp-update.service", "rec-deploy-mcp-update.timer", "rec-deploy-update.service", "rec-deploy-update.timer"}
+	units := []string{"rec-deploy.service", "rec-deploy-update.service", "rec-deploy-update.timer"}
 	for _, u := range units {
 		if err := os.WriteFile(filepath.Join(unitsDir, u), []byte("[Unit]"), 0o644); err != nil {
 			t.Fatal(err)
@@ -39,13 +40,19 @@ func scaffold(t *testing.T) (opts Options, calls *[]string) {
 	}
 
 	rec := []string{}
+	savedLegacyDir := legacyDir
+	legacyDir = filepath.Join(dir, "legacy-lib")
+	// Only the current units report as enabled and running: a legacy unit is
+	// only ever there on a box a former release installed, which a test says out loud.
+	current := func(_ context.Context, unit string) bool { return !slices.Contains(legacyUnits, unit) }
 	systemdAvailable = func() bool { return true }
-	unitEnabled = func(_ context.Context, _ string) bool { return true }
-	unitActive = func(_ context.Context, _ string) bool { return true }
+	unitEnabled = current
+	unitActive = current
 	disableNow = func(_ context.Context, unit string) error { rec = append(rec, "disable "+unit); return nil }
 	reload = func(_ context.Context) error { rec = append(rec, "reload"); return nil }
 	packageOwner = func(_ context.Context, _ string) string { return "" }
 	t.Cleanup(func() {
+		legacyDir = savedLegacyDir
 		systemdAvailable = defaultSystemdAvailable
 		unitEnabled = defaultUnitEnabled
 		unitActive = defaultUnitActive
@@ -80,7 +87,7 @@ func TestRunRemovesEverything(t *testing.T) {
 	if r.Failed() {
 		t.Fatalf("run failed: %+v", r.Steps)
 	}
-	want := []string{"disable rec-deploy.service", "disable rec-deploy-mcp.service", "disable rec-deploy-mcp-tunnel.service", "disable rec-deploy-mcp-update.timer", "disable rec-deploy-update.timer", "reload"}
+	want := []string{"disable rec-deploy.service", "disable rec-deploy-update.timer", "reload"}
 	if len(*calls) != len(want) {
 		t.Fatalf("systemd calls = %v, want %v", *calls, want)
 	}
@@ -397,5 +404,138 @@ func TestPhaseIsNotSerialized(t *testing.T) {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("--json lost %s: %s", want, out)
 		}
+	}
+}
+
+// addLegacy lays out what a release with remote MCP left on a box: its four unit
+// files and the helper directory it downloaded cloudflared into.
+func addLegacy(t *testing.T, opts Options) {
+	t.Helper()
+
+	for _, u := range legacyUnits {
+		if err := os.WriteFile(filepath.Join(opts.UnitsDir, u), []byte("[Unit]"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "cloudflared"), []byte("ELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRunRemovesLegacyFiles: a box that updated itself from a release with
+// remote MCP still carries its unit files and the helper directory, and
+// uninstall reports each of them removed.
+func TestRunRemovesLegacyFiles(t *testing.T) {
+	opts, _ := scaffold(t)
+	addLegacy(t, opts)
+
+	r := Run(context.Background(), opts)
+
+	if r.Failed() {
+		t.Fatalf("run failed: %+v", r.Steps)
+	}
+	for _, u := range legacyUnits {
+		path := filepath.Join(opts.UnitsDir, u)
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s still exists", path)
+		}
+		if outcomes(r)[path] != OutcomeRemoved {
+			t.Errorf("outcome for %s = %v, want removed", path, outcomes(r)[path])
+		}
+	}
+	if _, err := os.Stat(legacyDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("%s still exists", legacyDir)
+	}
+	if outcomes(r)[legacyDir] != OutcomeRemoved {
+		t.Errorf("outcome for %s = %v, want removed", legacyDir, outcomes(r)[legacyDir])
+	}
+}
+
+// TestRunDisablesAnActiveLegacyUnit: a legacy unit that is running is stopped
+// and disabled before its file goes, and the report says so.
+func TestRunDisablesAnActiveLegacyUnit(t *testing.T) {
+	opts, calls := scaffold(t)
+	addLegacy(t, opts)
+	const tunnel = "rec-deploy-mcp-tunnel.service"
+	unitActive = func(_ context.Context, unit string) bool {
+		return unit == tunnel || !slices.Contains(legacyUnits, unit)
+	}
+
+	r := Run(context.Background(), opts)
+
+	if r.Failed() {
+		t.Fatalf("run failed: %+v", r.Steps)
+	}
+	disabled := slices.Index(*calls, "disable "+tunnel)
+	if disabled < 0 {
+		t.Fatalf("%s was not disabled: calls = %v", tunnel, *calls)
+	}
+	if disabled > slices.Index(*calls, "reload") {
+		t.Errorf("%s was disabled after its file was removed: calls = %v", tunnel, *calls)
+	}
+	if outcomes(r)[tunnel] != OutcomeRemoved {
+		t.Errorf("outcome for %s = %v, want removed", tunnel, outcomes(r)[tunnel])
+	}
+	for _, c := range *calls {
+		if strings.HasPrefix(c, "disable rec-deploy-mcp") && c != "disable "+tunnel {
+			t.Errorf("%q: only the running legacy unit may be disabled", c)
+		}
+	}
+}
+
+// TestRunSaysNothingAboutAbsentLegacy: a box installed after remote MCP went away
+// has no legacy unit and no helper directory, and the report must not mention them.
+func TestRunSaysNothingAboutAbsentLegacy(t *testing.T) {
+	opts, _ := scaffold(t)
+
+	r := Run(context.Background(), opts)
+
+	for _, s := range r.Steps {
+		if strings.Contains(s.Target, "rec-deploy-mcp") || s.Target == legacyDir {
+			t.Errorf("step for %q on a box that never had it: %+v", s.Target, s)
+		}
+	}
+}
+
+// TestRunKeepDataStillRemovesLegacyDir: the helper directory holds a program,
+// not data, so --keep-data leaves it alone no more than it leaves the binary.
+func TestRunKeepDataStillRemovesLegacyDir(t *testing.T) {
+	opts, _ := scaffold(t)
+	addLegacy(t, opts)
+	opts.KeepData = true
+
+	r := Run(context.Background(), opts)
+
+	if _, err := os.Stat(legacyDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("%s survived KeepData", legacyDir)
+	}
+	if outcomes(r)[legacyDir] != OutcomeRemoved {
+		t.Errorf("outcome for %s = %v, want removed", legacyDir, outcomes(r)[legacyDir])
+	}
+}
+
+// TestRunRemovesLegacyDirWhenAPackageOwnsTheBinary: no package owns the helper
+// directory, so a package-owned binary defers only itself.
+func TestRunRemovesLegacyDirWhenAPackageOwnsTheBinary(t *testing.T) {
+	opts, _ := scaffold(t)
+	addLegacy(t, opts)
+	packageOwner = func(_ context.Context, path string) string {
+		if path == opts.BinaryPath {
+			return "rec-deploy"
+		}
+
+		return ""
+	}
+
+	r := Run(context.Background(), opts)
+
+	if _, err := os.Stat(legacyDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("%s survived a package-owned binary", legacyDir)
+	}
+	if outcomes(r)[legacyDir] != OutcomeRemoved {
+		t.Errorf("outcome for %s = %v, want removed", legacyDir, outcomes(r)[legacyDir])
 	}
 }

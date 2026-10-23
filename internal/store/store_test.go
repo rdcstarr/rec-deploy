@@ -149,42 +149,6 @@ func TestDeployStartAllowsManyManualDeploys(t *testing.T) {
 	}
 }
 
-func TestOpenReadOnly(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "state.db")
-
-	if _, err := OpenReadOnly(ctx, path); err == nil {
-		t.Fatal("OpenReadOnly created a missing database")
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("missing database stat error = %v, want not exist", err)
-	}
-
-	writable, err := Open(ctx, path)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	if _, err := writable.RepoInsert(ctx, Repo{Repository: "owner/repo"}); err != nil {
-		t.Fatalf("RepoInsert: %v", err)
-	}
-	if err := writable.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	readonly, err := OpenReadOnly(ctx, path)
-	if err != nil {
-		t.Fatalf("OpenReadOnly: %v", err)
-	}
-	defer func() { _ = readonly.Close() }()
-	repos, err := readonly.Repos(ctx)
-	if err != nil || len(repos) != 1 || repos[0].Repository != "owner/repo" {
-		t.Fatalf("Repos = %+v, %v", repos, err)
-	}
-	if _, err := readonly.RepoInsert(ctx, Repo{Repository: "other/repo"}); err == nil {
-		t.Fatal("RepoInsert through read-only store succeeded")
-	}
-}
-
 func TestDeployPathsAndHistory(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)

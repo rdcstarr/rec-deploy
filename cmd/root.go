@@ -124,7 +124,6 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newSelfUpdateCmd())
 	root.AddCommand(newCompletionCmd())
 	root.AddCommand(newUninstallCmd())
-	root.AddCommand(newMCPCmd())
 
 	return root
 }
@@ -205,7 +204,6 @@ var hubEntries = []hubEntry{
 	{"status", "daemon, units and discovered checkouts"},
 	{"service", "start, stop or restart the webhook daemon"},
 	{"notifications", "Telegram and email: settings and test sends"},
-	{"mcp", "remote read-only access for AI clients"},
 	{"self-update", "check for and install a new release"},
 	{"uninstall", "remove rec-deploy from this server"},
 }

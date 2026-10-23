@@ -32,10 +32,6 @@ var files embed.FS
 // Names are the units rec-deploy installs, in the order install.sh writes them.
 var Names = []string{
 	"rec-deploy.service",
-	"rec-deploy-mcp.service",
-	"rec-deploy-mcp-tunnel.service",
-	"rec-deploy-mcp-update.service",
-	"rec-deploy-mcp-update.timer",
 	"rec-deploy-update.service",
 	"rec-deploy-update.timer",
 }

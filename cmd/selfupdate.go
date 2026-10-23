@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -158,11 +157,6 @@ func confirmRestart(ctx context.Context, current, latest string) (bool, error) {
 	}
 
 	detail := "The daemon is still running " + current + ". It is stopped and started on " + latest + ", and rolled back automatically if it does not stay up."
-	if systemd.IsActive(ctx, mcpService) {
-		// The confirm must name everything the answer restarts, or an operator
-		// approves one interruption and gets two.
-		detail += " " + mcpService + " runs the same binary and is restarted with it."
-	}
 	if running, err := runningDeployCount(ctx); err != nil {
 		// "cannot X; proceeding without Y" matches the pattern selfUpdateRestart
 		// uses for its own best-effort store reads a few lines below.
@@ -326,12 +320,7 @@ func selfUpdateRestart(ctx context.Context, current string) error {
 	}
 
 	res, err := selfupdate.ApplyAndRestart(ctx, current, selfupdate.RestartOptions{
-		Unit: daemonUnit,
-		// The MCP origin is a second long-lived process on the same binary, and
-		// only the cloudflare mode runs it as its own unit — the local mode serves
-		// MCP from inside the daemon, so it comes back with it. Without this, a box
-		// on the cloudflare mode answers MCP from the pre-update release forever.
-		Companions: []string{mcpService},
+		Unit:       daemonUnit,
 		BackupPath: filepath.Join(stateDir, "rec-deploy.prev"),
 		Wait:       30 * time.Second,
 	})
@@ -413,12 +402,7 @@ func selfUpdateRestart(ctx context.Context, current string) error {
 		return ui.PrintJSON(res)
 	}
 
-	// Name every unit that came back, not only the daemon: on a box running the
-	// MCP origin as its own unit the update bounced that too, and this line — in
-	// the journal, under the timer — is where the operator learns it. A
-	// slog.Info there would not do: every command but the daemon logs at Warn.
-	restarted := strings.Join(append([]string{daemonUnit}, res.RestartedCompanions...), ", ")
-	ui.Success(fmt.Sprintf("updated rec-deploy %s → %s and restarted %s", res.Current, res.Latest, restarted))
+	ui.Success(fmt.Sprintf("updated rec-deploy %s → %s and restarted %s", res.Current, res.Latest, daemonUnit))
 
 	return nil
 }

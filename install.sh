@@ -10,7 +10,9 @@
 #
 # It is plain shell — read it first if you like before piping it into a root
 # shell. It touches only the rec-deploy binary in /usr/bin (/usr/local/bin on
-# macOS) and the systemd units in /etc/systemd/system/rec-deploy*.
+# macOS) and the systemd units in /etc/systemd/system/rec-deploy*. On an upgrade
+# it also removes the remote-MCP units, /usr/local/lib/rec-deploy and
+# /var/lib/rec-deploy/mcp that a former release installed.
 #
 # RELEASING: this file is served from main and installs the newest published
 # release, so a change here goes live the moment it merges — against a tarball
@@ -34,7 +36,11 @@ SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
 
 # UNITS are every systemd unit the installer drops in. The updater's two are
 # installed but left disabled — `rec-deploy init` is where the operator opts in.
-UNITS="rec-deploy.service rec-deploy-mcp.service rec-deploy-mcp-tunnel.service rec-deploy-mcp-update.service rec-deploy-mcp-update.timer rec-deploy-update.service rec-deploy-update.timer"
+UNITS="rec-deploy.service rec-deploy-update.service rec-deploy-update.timer"
+
+# LEGACY_UNITS are the remote-MCP units a former release installed. No release
+# ships them, so an upgrade removes them or they fail on every start.
+LEGACY_UNITS="rec-deploy-mcp.service rec-deploy-mcp-tunnel.service rec-deploy-mcp-update.service rec-deploy-mcp-update.timer"
 
 # Progress goes to stderr, never stdout: `platform` returns its value by printing
 # it, so anything a helper writes to stdout lands inside `$(platform)`'s result.
@@ -167,6 +173,42 @@ install_unit() {
 	return 0
 }
 
+# remove_legacy_mcp deletes what a release with remote MCP left on the box. It
+# acts only when one of those unit files exists, so a box without them sees
+# nothing, and it never fails the install: the cleanup is best-effort, and the new
+# daemon does not depend on it.
+remove_legacy_mcp() {
+	local unit found=0 tunnel_active=0
+	for unit in $LEGACY_UNITS; do
+		if [ -e "/etc/systemd/system/${unit}" ]; then
+			found=1
+			break
+		fi
+	done
+	[ "$found" -eq 1 ] || return 0
+
+	# The tunnel unit is the only sign the Cloudflare resources were ever in use,
+	# and stopping it below erases that sign — so read it first.
+	if systemctl is-active --quiet rec-deploy-mcp-tunnel.service; then
+		tunnel_active=1
+	fi
+
+	# One call per unit: systemctl fails the whole call on a name it has no file for.
+	for unit in rec-deploy-mcp-tunnel.service rec-deploy-mcp.service rec-deploy-mcp-update.timer; do
+		systemctl disable --now "$unit" >/dev/null 2>&1 || true
+	done
+	for unit in $LEGACY_UNITS; do
+		rm -f "/etc/systemd/system/${unit}" || true
+	done
+	rm -rf /usr/local/lib/rec-deploy /var/lib/rec-deploy/mcp || true
+	systemctl daemon-reload || true
+	ok "removed the remote MCP units and files a former release installed"
+
+	if [ "$tunnel_active" -eq 1 ]; then
+		warn "the Cloudflare tunnel and its DNS record are still in your Cloudflare account — delete them in the Cloudflare dashboard, and revoke the Cloudflare API token created for them"
+	fi
+}
+
 main() {
 	need_root "$@"
 
@@ -204,6 +246,7 @@ main() {
 
 	if [ "$os" = "linux" ] && install_unit "$tag"; then
 		have_systemd=1
+		remove_legacy_mcp
 	fi
 
 	# An upgrade replaces the binary on disk, but a running daemon keeps the old
@@ -215,17 +258,6 @@ main() {
 			restarted=1
 		else
 			warn "could not restart the running daemon — the old binary keeps serving until:  systemctl restart rec-deploy"
-		fi
-	fi
-
-	# The MCP origin is a second long-lived process on the same binary, run as its
-	# own unit by the cloudflare mode. Nothing else ever restarts it, so it would
-	# answer from the previous release until the box reboots.
-	if [ "$have_systemd" -eq 1 ] && systemctl is-active --quiet rec-deploy-mcp; then
-		if systemctl restart rec-deploy-mcp; then
-			ok "restarted the MCP origin on the new binary"
-		else
-			warn "could not restart the MCP origin — it answers from the previous release until:  systemctl restart rec-deploy-mcp"
 		fi
 	fi
 
